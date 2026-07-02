@@ -69,6 +69,7 @@ export function ComposePanel({ accounts, account, mode, message, onClose, onSend
     try {
       await onSend({
         fromAccountId,
+        fromName: fromAccount.label,
         to: parseRecipients(recipientText || message?.senderEmail || ""),
         cc: parseRecipients(ccText),
         bcc: parseRecipients(bccText),
@@ -311,7 +312,7 @@ function quoteBody(message: Message) {
 function uniqueAddresses(values: string[], self: string) {
   const seen = new Set<string>();
   const result: string[] = [];
-  values.forEach((value) => {
+  values.flatMap(splitAddressList).forEach((value) => {
     const address = normalizeAddress(value);
     const key = address.toLowerCase();
     if (!address || key === self || seen.has(key)) return;
@@ -319,6 +320,13 @@ function uniqueAddresses(values: string[], self: string) {
     result.push(address);
   });
   return result;
+}
+
+function splitAddressList(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function normalizeAddress(value: string) {

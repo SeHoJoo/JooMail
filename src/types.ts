@@ -70,6 +70,7 @@ export type ComposeMode = "compose" | "reply" | "replyAll" | "forward";
 
 export type ComposeDraft = {
   fromAccountId: string;
+  fromName?: string;
   to: string[];
   cc: string[];
   bcc: string[];

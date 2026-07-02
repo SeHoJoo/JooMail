@@ -34,7 +34,7 @@ export function MessageList({ title, unreadCount, messages, mailboxes, selectedI
   return (
     <section className="flex min-w-[320px] shrink-0 flex-col border-r border-line bg-white" style={{ width: "var(--list-width)" }}>
       {checkedCount > 0 ? (
-        <div className="flex h-11 items-center border-b border-line bg-selected px-4 text-accent">
+        <div className="flex h-11 items-center border-b border-line bg-selected px-2 text-accent">
           <input className="h-[15px] w-[15px] accent-accent" aria-label="선택 해제" checked onChange={onClearChecked} type="checkbox" />
           <span className="ml-3 text-[13px] font-medium">{checkedCount}개 선택됨</span>
           <div className="ml-auto flex gap-4 text-[#3a3f45]">
@@ -76,7 +76,7 @@ export function MessageList({ title, unreadCount, messages, mailboxes, selectedI
           {actionError ? <div className="absolute mt-12 text-[12px] font-medium text-[#b23a30]">{actionError}</div> : null}
         </div>
       ) : (
-        <div className="flex h-11 items-center border-b border-line px-4">
+        <div className="flex h-11 items-center border-b border-line px-2">
           <input className="h-[15px] w-[15px] accent-accent" checked={allVisibleChecked} disabled={!messages.length} onChange={onToggleAllChecked} type="checkbox" aria-label={allVisibleChecked ? "전체 선택 해제" : "전체 선택"} />
           <div className="ml-3 truncate text-[13.5px] font-bold text-ink">{search ? `'${search}' 결과 ${messages.length}건` : title}</div>
           <div className="ml-auto text-[11.5px] text-muted">{search ? "현재 메일함" : `안읽음 ${unreadCount}`}</div>

@@ -73,7 +73,7 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
               className="min-w-0 flex-1 border-0 bg-transparent text-[13.5px] text-ink outline-none placeholder:text-muted focus:outline-none"
               type="email"
               autoComplete="email"
-              placeholder="you@good-night.co.kr"
+              placeholder="이메일 주소"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
             />

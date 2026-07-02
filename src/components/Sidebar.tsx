@@ -11,16 +11,17 @@ type SidebarProps = {
   onSelectAccount: (id: string) => void;
   onSelectMailbox: (id: string) => void;
   onCompose: () => void;
+  onAddAccount?: () => void;
   onLogout?: () => void;
 };
 
-export function Sidebar({ accounts, selectedAccount, selectedMailboxId, onSelectAccount, onSelectMailbox, onCompose, onLogout }: SidebarProps) {
+export function Sidebar({ accounts, selectedAccount, selectedMailboxId, onSelectAccount, onSelectMailbox, onCompose, onAddAccount, onLogout }: SidebarProps) {
   const system = selectedAccount.mailboxes.filter((mailbox) => mailbox.kind !== "folder");
   const folders = selectedAccount.mailboxes.filter((mailbox) => mailbox.kind === "folder");
 
   return (
     <aside className="hidden w-[248px] shrink-0 flex-col border-r border-line bg-panel md:flex">
-      <AccountSwitcher accounts={accounts} selectedAccount={selectedAccount} onSelectAccount={onSelectAccount} onLogout={onLogout} />
+      <AccountSwitcher accounts={accounts} selectedAccount={selectedAccount} onSelectAccount={onSelectAccount} onAddAccount={onAddAccount} onLogout={onLogout} />
       <div className="px-[11px] pb-2 pt-[13px]">
         <button className="flex h-[38px] w-full items-center justify-center gap-2 rounded-lg bg-accent px-3 text-[13.5px] font-medium text-white" onClick={onCompose}>
           <Icon name="compose" className="h-4 w-4" />

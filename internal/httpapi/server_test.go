@@ -137,6 +137,40 @@ func TestLoginStoresEncryptedCredentialAndSetsRememberedSessionCookie(t *testing
 	}
 }
 
+func TestLoginRejectsWrongEmailDomainBeforeIMAPLogin(t *testing.T) {
+	var loginCalled bool
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string {
+			loginCalled = true
+			return "OK LOGIN completed"
+		},
+	})
+	config := testConfig(t, host, port)
+	config.LoginDomain = "good-night.co.kr"
+	server := NewServerWithConfig(MockStore(), config)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewBufferString(`{"email":"jooseho@naver.com","password":"correct-password","remember":true}`))
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+	}
+	if loginCalled {
+		t.Fatal("IMAP login was called for disallowed email domain")
+	}
+	if len(recorder.Result().Cookies()) != 0 {
+		t.Fatalf("cookies = %#v, want none", recorder.Result().Cookies())
+	}
+}
+
+func TestConfiguredLoginDomainDerivesFromMailHost(t *testing.T) {
+	config := Config{IMAPHost: "mail.good-night.co.kr"}
+	if domain := configuredLoginDomain(config); domain != "good-night.co.kr" {
+		t.Fatalf("domain = %q, want good-night.co.kr", domain)
+	}
+}
+
 func TestSessionUsesStoredCredentialForMailboxAndMessageRoutes(t *testing.T) {
 	rawMessage := strings.Join([]string{
 		"From: Alice <alice@example.com>",
@@ -431,6 +465,31 @@ func TestAccountsDecodeModifiedUTF7MailboxNames(t *testing.T) {
 	}
 	if !containsString(labels, "테스트상자") {
 		t.Fatalf("labels = %#v, want decoded Korean mailbox label", labels)
+	}
+}
+
+func TestParseRawMessageSplitsAddressListHeaders(t *testing.T) {
+	raw := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>, Bob <bob@example.com>",
+		"Cc: Carol <carol@example.com>, dave@example.com",
+		"Subject: Reply all addresses",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		"Hello",
+	}, "\r\n")
+
+	message, err := parseRawMessage("jooseho@good-night.co.kr", "inbox", "7", []byte(raw))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if got, want := message.Headers.To, []string{"Jooseho <jooseho@good-night.co.kr>", "Bob <bob@example.com>"}; !slicesEqual(got, want) {
+		t.Fatalf("to = %#v, want %#v", got, want)
+	}
+	if got, want := message.Headers.Cc, []string{"Carol <carol@example.com>", "dave@example.com"}; !slicesEqual(got, want) {
+		t.Fatalf("cc = %#v, want %#v", got, want)
 	}
 }
 
@@ -1006,6 +1065,19 @@ func TestSMTPPort465UsesImplicitTLS(t *testing.T) {
 	}
 }
 
+func TestFormatOutgoingMessageUsesConfiguredFromName(t *testing.T) {
+	message := formatOutgoingMessage("jooseho@good-night.co.kr", sendRequest{
+		FromName: "Jooseho Joo\r\nInjected: no",
+		To:       []string{"alice@example.com"},
+		Subject:  "Hello",
+		TextBody: "Plain message",
+	})
+
+	if !strings.Contains(message, "From: Jooseho Joo  Injected: no <jooseho@good-night.co.kr>\r\n") {
+		t.Fatalf("message = %q, want sanitized configured from name", message)
+	}
+}
+
 func TestLogoutDeletesCredentialAndExpiresCookie(t *testing.T) {
 	host, port := startFakeIMAPServer(t, fakeIMAPScript{
 		onLogin: func(username, password string) string { return "OK LOGIN completed" },
@@ -1107,6 +1179,18 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func slicesEqual(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func findMailboxByLabel(mailboxes []Mailbox, label string) (Mailbox, bool) {

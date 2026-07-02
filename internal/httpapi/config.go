@@ -12,6 +12,7 @@ type Config struct {
 	IMAPPort       string
 	IMAPTLS        bool
 	IMAPUserFormat string
+	LoginDomain    string
 	SMTPHost       string
 	SMTPPort       string
 	SMTPTLS        bool
@@ -35,6 +36,7 @@ func LoadConfig() Config {
 		IMAPPort:       os.Getenv("JOOMAIL_IMAP_PORT"),
 		IMAPTLS:        envBool("JOOMAIL_IMAP_TLS"),
 		IMAPUserFormat: os.Getenv("JOOMAIL_IMAP_USER_FORMAT"),
+		LoginDomain:    os.Getenv("JOOMAIL_LOGIN_DOMAIN"),
 		SMTPHost:       os.Getenv("JOOMAIL_SMTP_HOST"),
 		SMTPPort:       os.Getenv("JOOMAIL_SMTP_PORT"),
 		SMTPTLS:        envBool("JOOMAIL_SMTP_TLS"),

@@ -893,8 +893,8 @@ func parseRawMessage(accountID string, mailboxID string, uid string, raw []byte)
 		},
 		Headers: MessageHead{
 			From:    header.Get("From"),
-			To:      header["To"],
-			Cc:      header["Cc"],
+			To:      parseAddressListHeaders(header["To"]),
+			Cc:      parseAddressListHeaders(header["Cc"]),
 			Date:    date,
 			Subject: subject,
 		},
@@ -1161,6 +1161,27 @@ func parseAddress(value string) (string, string) {
 		name = address.Address
 	}
 	return name, address.Address
+}
+
+func parseAddressListHeaders(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	parser := mail.AddressParser{WordDecoder: &mime.WordDecoder{}}
+	addresses, err := parser.ParseList(strings.Join(values, ","))
+	if err != nil {
+		return values
+	}
+	result := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		name := decodeHeader(address.Name)
+		if name == "" {
+			result = append(result, address.Address)
+			continue
+		}
+		result = append(result, name+" <"+address.Address+">")
+	}
+	return result
 }
 
 func decodeHeader(value string) string {

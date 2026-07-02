@@ -38,7 +38,7 @@ func (s *Server) requireCredential(w http.ResponseWriter, r *http.Request) (auth
 }
 
 func (s *Server) accountForSession(email string, mailboxes []Mailbox) Account {
-	localPart, _ := splitLoginEmail(email)
+	localPart, _, _ := splitLoginEmail(email)
 	return Account{
 		ID:        email,
 		Email:     email,

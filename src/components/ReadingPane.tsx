@@ -93,10 +93,10 @@ export function ReadingPane({ message, mode, mailboxes, showRemoteImagesByDefaul
           <ActionButton icon="reply" label="답장" onClick={onReply} />
           <ActionButton icon="replyAll" label="전체답장" onClick={onReplyAll} />
           <ActionButton icon="forward" label="전달" onClick={onForward} />
-          <div className="ml-auto flex gap-[5px] text-[#3a3f45]">
+          <div className="ml-auto flex items-center gap-[5px] text-[#3a3f45]">
             <IconButton icon="archive" label="보관" onClick={() => runMessageAction(message, onArchive, setActionError, closeActionMenus)} />
             <IconButton icon="trash" label="삭제" onClick={() => runMessageAction(message, onTrash, setActionError, closeActionMenus)} />
-            <div className="relative">
+            <div className="relative flex h-[30px] w-[30px] items-center justify-center">
               <IconButton
                 icon="folder"
                 label="이동"
@@ -120,7 +120,7 @@ export function ReadingPane({ message, mode, mailboxes, showRemoteImagesByDefaul
                 </ActionMenu>
               ) : null}
             </div>
-            <div className="relative">
+            <div className="relative flex h-[30px] w-[30px] items-center justify-center">
               <IconButton
                 icon="more"
                 label="더보기"

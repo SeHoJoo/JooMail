@@ -24,6 +24,7 @@ var newSMTPTLSConfig = func(host string) *tls.Config {
 }
 
 type sendRequest struct {
+	FromName    string               `json:"fromName"`
 	To          []string             `json:"to"`
 	Cc          []string             `json:"cc"`
 	Bcc         []string             `json:"bcc"`
@@ -75,6 +76,7 @@ func parseMultipartSendRequest(r *http.Request, request *sendRequest) error {
 	request.To = formRecipientList(r, "to")
 	request.Cc = formRecipientList(r, "cc")
 	request.Bcc = formRecipientList(r, "bcc")
+	request.FromName = r.FormValue("fromName")
 	request.Subject = r.FormValue("subject")
 	request.TextBody = r.FormValue("textBody")
 	if r.MultipartForm == nil {
@@ -215,7 +217,7 @@ func smtpImplicitTLS(config Config) bool {
 
 func formatOutgoingMessage(from string, request sendRequest) string {
 	headers := []string{
-		"From: " + from,
+		"From: " + formatFromHeader(from, request.FromName),
 		"To: " + strings.Join(request.To, ", "),
 		"Date: " + time.Now().Format(time.RFC1123Z),
 	}
@@ -234,6 +236,14 @@ func formatOutgoingMessage(from string, request sendRequest) string {
 		"Content-Transfer-Encoding: 8bit",
 	)
 	return strings.Join(headers, "\r\n") + "\r\n\r\n" + request.TextBody + "\r\n"
+}
+
+func formatFromHeader(email string, name string) string {
+	name = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(name, "\r", " "), "\n", " "))
+	if name == "" {
+		return email
+	}
+	return mime.QEncoding.Encode("UTF-8", name) + " <" + email + ">"
 }
 
 func formatMultipartOutgoingMessage(headers []string, request sendRequest) string {

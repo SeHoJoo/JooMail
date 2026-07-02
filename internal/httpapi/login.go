@@ -36,9 +36,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	localPart, ok := splitLoginEmail(email)
+	localPart, domain, ok := splitLoginEmail(email)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid email address")
+		return
+	}
+	if !s.loginDomainAllowed(domain) {
+		writeError(w, http.StatusUnauthorized, "이메일 또는 비밀번호가 올바르지 않습니다")
 		return
 	}
 
@@ -91,9 +95,27 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"account": s.accountForLogin(email, localPart)})
 }
 
-func splitLoginEmail(email string) (string, bool) {
+func splitLoginEmail(email string) (string, string, bool) {
 	localPart, domain, ok := strings.Cut(email, "@")
-	return localPart, ok && localPart != "" && domain != "" && !strings.Contains(domain, "@")
+	return localPart, strings.ToLower(domain), ok && localPart != "" && domain != "" && !strings.Contains(domain, "@")
+}
+
+func (s *Server) loginDomainAllowed(domain string) bool {
+	allowedDomain := configuredLoginDomain(s.config)
+	return allowedDomain == "" || strings.EqualFold(domain, allowedDomain)
+}
+
+func configuredLoginDomain(config Config) string {
+	if config.LoginDomain != "" {
+		return strings.ToLower(strings.TrimSpace(config.LoginDomain))
+	}
+	host := strings.ToLower(strings.TrimSpace(config.IMAPHost))
+	for _, prefix := range []string{"mail.", "imap.", "dovecot."} {
+		if strings.HasPrefix(host, prefix) {
+			return strings.TrimPrefix(host, prefix)
+		}
+	}
+	return ""
 }
 
 func (s *Server) accountForLogin(email string, localPart string) Account {

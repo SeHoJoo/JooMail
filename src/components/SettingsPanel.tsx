@@ -4,14 +4,15 @@ import { Icon } from "./Icon";
 
 type SettingsPanelProps = {
   account: Account;
+  displayName: string;
+  onDisplayNameChange: (value: string) => void;
   remoteImagesEnabled: boolean;
   onRemoteImagesChange: (enabled: boolean) => void;
-  onResetListWidth: () => void;
   onLogout?: () => void;
   onClose: () => void;
 };
 
-export function SettingsPanel({ account, remoteImagesEnabled, onRemoteImagesChange, onResetListWidth, onLogout, onClose }: SettingsPanelProps) {
+export function SettingsPanel({ account, displayName, onDisplayNameChange, remoteImagesEnabled, onRemoteImagesChange, onLogout, onClose }: SettingsPanelProps) {
   return (
     <div className="fixed inset-0 z-30 hidden bg-black/10 md:block" role="presentation" onMouseDown={onClose}>
       <section
@@ -33,6 +34,20 @@ export function SettingsPanel({ account, remoteImagesEnabled, onRemoteImagesChan
           </div>
 
           <div className="border-b border-line py-3">
+            <label className="block text-[12px] font-bold text-[#5b6169]" htmlFor="settings-display-name">
+              이름
+            </label>
+            <input
+              id="settings-display-name"
+              className="mt-2 h-9 w-full rounded-md border border-[#dfe2e6] px-3 text-[13px] text-ink outline-none placeholder:text-muted focus:border-accent"
+              value={displayName}
+              onChange={(event) => onDisplayNameChange(event.target.value)}
+              placeholder="발신자 이름"
+            />
+            <div className="mt-1 text-[11.5px] leading-4 text-muted">메일을 보낼 때 발신자 이름으로 사용합니다.</div>
+          </div>
+
+          <div className="border-b border-line py-3">
             <label className="flex items-center gap-3">
               <span className="min-w-0 flex-1">
                 <span className="block text-[13px] font-medium text-ink">원격 이미지 자동 표시</span>
@@ -48,13 +63,6 @@ export function SettingsPanel({ account, remoteImagesEnabled, onRemoteImagesChan
                 <span className={remoteImagesEnabled ? "block h-5 w-5 translate-x-5 rounded-full bg-white transition" : "block h-5 w-5 rounded-full bg-white transition"} />
               </button>
             </label>
-          </div>
-
-          <div className="border-b border-line py-3">
-            <button className="flex h-9 w-full items-center justify-between rounded-md px-2 text-left text-[13px] font-medium text-ink hover:bg-[#f7f8f9]" onClick={onResetListWidth} type="button">
-              목록 폭 기본값으로
-              <span className="text-[11.5px] font-normal text-muted">388px</span>
-            </button>
           </div>
 
           <div className="flex items-center justify-between border-b border-line py-3 text-[12.5px]">

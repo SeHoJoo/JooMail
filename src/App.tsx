@@ -10,9 +10,11 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { Toolbar } from "./components/Toolbar";
 import { DevStateSwitcher, type QaState } from "./components/DevStateSwitcher";
 import { LoginPage } from "./components/LoginPage";
+import { AddAccountModal } from "./components/AddAccountModal";
 
 const LIST_WIDTH_KEY = "joomail:list-width";
 const REMOTE_IMAGES_KEY = "joomail:remote-images";
+const ACCOUNT_NAMES_KEY = "joomail:account-names";
 const DEFAULT_LIST_WIDTH = 388;
 const QA_STATES: QaState[] = ["normal", "loading", "error", "empty", "empty-reading", "search", "search-empty", "multiselect", "compose"];
 const SEARCH_QA_QUERY = "MIME";
@@ -65,7 +67,7 @@ type AppShellProps = {
 
 export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   const useApi = Boolean(initialAccounts);
-  const [accounts] = useState<Account[]>(initialAccounts ?? mockAccounts);
+  const [accounts, setAccounts] = useState<Account[]>(initialAccounts ?? mockAccounts);
   const [accountId, setAccountId] = useState((initialAccounts ?? mockAccounts)[0].id);
   const [mailboxId, setMailboxId] = useState("inbox");
   const [selectedMessageId, setSelectedMessageId] = useState(useApi ? "" : "m1");
@@ -80,13 +82,16 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   const [reloadToken, setReloadToken] = useState(0);
   const [listWidth, setListWidth] = useState(() => Number(localStorage.getItem(LIST_WIDTH_KEY)) || DEFAULT_LIST_WIDTH);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [addAccountOpen, setAddAccountOpen] = useState(false);
+  const [accountNames, setAccountNames] = useState<Record<string, string>>(() => loadAccountNames());
   const [showRemoteImagesByDefault, setShowRemoteImagesByDefault] = useState(() => localStorage.getItem(REMOTE_IMAGES_KEY) === "true");
   const [forceEmptyList, setForceEmptyList] = useState(false);
   const shellRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const initialQaAppliedRef = useRef(false);
 
-  const selectedAccount = accounts.find((account) => account.id === accountId) ?? accounts[0];
+  const displayAccounts = useMemo(() => accounts.map((account) => withDisplayName(account, accountNames[account.email])), [accounts, accountNames]);
+  const selectedAccount = displayAccounts.find((account) => account.id === accountId) ?? displayAccounts[0];
 
   const visibleMessages = useMemo(() => {
     if (useApi) return apiMessages;
@@ -119,6 +124,10 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   useEffect(() => {
     localStorage.setItem(REMOTE_IMAGES_KEY, String(showRemoteImagesByDefault));
   }, [showRemoteImagesByDefault]);
+
+  useEffect(() => {
+    localStorage.setItem(ACCOUNT_NAMES_KEY, JSON.stringify(accountNames));
+  }, [accountNames]);
 
   useEffect(() => {
     if (!useApi) return;
@@ -360,10 +369,6 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     setMailboxId("inbox");
   }
 
-  function resetListWidth() {
-    setListWidth(DEFAULT_LIST_WIDTH);
-  }
-
   function handleSearch(nextSearch: string) {
     setForceEmptyList(false);
     setSearch(nextSearch);
@@ -390,15 +395,19 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
 
   async function sendDraft(draft: ComposeDraft) {
     try {
+      const fromAccount = displayAccounts.find((account) => account.id === draft.fromAccountId);
+      const configuredFromName = fromAccount ? accountNames[fromAccount.email]?.trim() : "";
+      const nextDraft = { ...draft, fromName: configuredFromName };
       if (draft.attachments?.length) {
         const formData = new FormData();
-        formData.set("fromAccountId", draft.fromAccountId);
-        formData.set("to", JSON.stringify(draft.to));
-        formData.set("cc", JSON.stringify(draft.cc));
-        formData.set("bcc", JSON.stringify(draft.bcc));
-        formData.set("subject", draft.subject);
-        formData.set("textBody", draft.textBody);
-        draft.attachments.forEach((file) => formData.append("attachments", file, file.name));
+        formData.set("fromAccountId", nextDraft.fromAccountId);
+        formData.set("fromName", nextDraft.fromName ?? "");
+        formData.set("to", JSON.stringify(nextDraft.to));
+        formData.set("cc", JSON.stringify(nextDraft.cc));
+        formData.set("bcc", JSON.stringify(nextDraft.bcc));
+        formData.set("subject", nextDraft.subject);
+        formData.set("textBody", nextDraft.textBody);
+        nextDraft.attachments?.forEach((file) => formData.append("attachments", file, file.name));
         await apiJSON("/api/send", {
           method: "POST",
           body: formData,
@@ -406,7 +415,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
       } else {
         await apiJSON("/api/send", {
           method: "POST",
-          body: JSON.stringify(draft),
+          body: JSON.stringify(nextDraft),
         });
       }
       setReloadToken((value) => value + 1);
@@ -416,6 +425,19 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     }
   }
 
+  function updateAccountName(email: string, value: string) {
+    setAccountNames((current) => {
+      const next = { ...current };
+      const trimmed = value.trim();
+      if (trimmed) {
+        next[email] = value;
+      } else {
+        delete next[email];
+      }
+      return next;
+    });
+  }
+
   async function logout() {
     try {
       await apiJSON("/api/logout", { method: "POST" });
@@ -423,6 +445,32 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
       // The local session should still be dropped if the server already expired it.
     } finally {
       onSessionExpired?.();
+    }
+  }
+
+  async function refreshAccounts(nextAccount?: Account) {
+    if (!useApi) {
+      if (nextAccount) setAccountId(nextAccount.id);
+      setAddAccountOpen(false);
+      return;
+    }
+    try {
+      const body = await apiJSON<{ accounts: Account[] }>("/api/accounts");
+      setAccounts(body.accounts);
+      const nextID = nextAccount?.id ?? body.accounts[0]?.id;
+      if (nextID) {
+        setAccountId(nextID);
+      }
+      setMailboxId("inbox");
+      setSelectedMessageId("");
+      setSelectedMessageDetail(undefined);
+      setApiMessages([]);
+      setSearch("");
+      setCheckedIds(new Set());
+      setReloadToken((token) => token + 1);
+      setAddAccountOpen(false);
+    } catch (error) {
+      if (isUnauthorized(error)) onSessionExpired?.();
     }
   }
 
@@ -606,12 +654,13 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         <Toolbar search={search} searchInputRef={searchInputRef} onSearch={handleSearch} onRefresh={retry} onSettings={() => setSettingsOpen(true)} />
         <div className="min-h-0 flex flex-1">
           <Sidebar
-            accounts={accounts}
+            accounts={displayAccounts}
             selectedAccount={selectedAccount}
             selectedMailboxId={mailboxId}
             onSelectAccount={selectAccount}
             onSelectMailbox={selectMailbox}
             onCompose={openCompose}
+            onAddAccount={useApi ? () => setAddAccountOpen(true) : undefined}
             onLogout={useApi ? logout : undefined}
           />
           <MessageList
@@ -654,14 +703,16 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
       {settingsOpen ? (
         <SettingsPanel
           account={selectedAccount}
+          displayName={accountNames[selectedAccount.email] ?? ""}
+          onDisplayNameChange={(value) => updateAccountName(selectedAccount.email, value)}
           remoteImagesEnabled={showRemoteImagesByDefault}
           onRemoteImagesChange={setShowRemoteImagesByDefault}
-          onResetListWidth={resetListWidth}
           onLogout={useApi ? logout : undefined}
           onClose={() => setSettingsOpen(false)}
         />
       ) : null}
-      {composeOpen ? <ComposePanel accounts={accounts} account={selectedAccount} mode={composeMode} message={composeMessage} onClose={closeCompose} onSend={useApi ? sendDraft : undefined} /> : null}
+      {addAccountOpen ? <AddAccountModal onClose={() => setAddAccountOpen(false)} onAdded={refreshAccounts} /> : null}
+      {composeOpen ? <ComposePanel accounts={displayAccounts} account={selectedAccount} mode={composeMode} message={composeMessage} onClose={closeCompose} onSend={useApi ? sendDraft : undefined} /> : null}
       {import.meta.env.DEV && !composeOpen ? <DevStateSwitcher states={QA_STATES} onApply={applyQaState} /> : null}
     </div>
   );
@@ -725,4 +776,29 @@ function normalizeMessage(message: ApiMessage): Message {
 
 function flattenMailboxes(mailboxes: Mailbox[]): Mailbox[] {
   return mailboxes.flatMap((mailbox) => [mailbox, ...flattenMailboxes(mailbox.children ?? [])]);
+}
+
+function loadAccountNames(): Record<string, string> {
+  try {
+    const value = localStorage.getItem(ACCOUNT_NAMES_KEY);
+    if (!value) return {};
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function withDisplayName(account: Account, displayName?: string): Account {
+  const name = displayName?.trim();
+  if (!name) return account;
+  return {
+    ...account,
+    label: name,
+    initials: firstInitial(name),
+  };
+}
+
+function firstInitial(value: string) {
+  return value.trim().slice(0, 1).toUpperCase() || "";
 }
