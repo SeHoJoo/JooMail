@@ -19,9 +19,13 @@ export function ComposePanel({ account, message, onClose }: ComposePanelProps) {
     <section className="fixed inset-0 z-40 flex flex-col bg-white md:inset-auto md:bottom-[15px] md:right-5 md:h-[599px] md:w-[580px] md:rounded-[10px] md:shadow-compose" data-compose-panel>
       <div className="flex h-[38px] shrink-0 items-center bg-[#1e2126] px-4 text-white md:rounded-t-[10px]">
         <div className="text-[13px] font-medium">{message ? "답장" : "새 메일"}</div>
-        <div className="ml-auto flex gap-5">
-          <Icon name="minimize" className="hidden h-3.5 w-3.5 md:block" />
-          <Icon name="expand" className="hidden h-3.5 w-3.5 md:block" />
+        <div className="ml-auto flex items-center gap-1.5">
+          <span className="hidden h-7 w-7 items-center justify-center md:flex" aria-hidden="true">
+            <Icon name="minimize" className="h-3.5 w-3.5" />
+          </span>
+          <span className="hidden h-7 w-7 items-center justify-center md:flex" aria-hidden="true">
+            <Icon name="expand" className="h-3.5 w-3.5" />
+          </span>
           <button className="flex h-7 w-7 items-center justify-center rounded-md bg-white/10 hover:bg-white/15 md:bg-transparent md:hover:bg-white/10" aria-label="작성 닫기" onClick={onClose}>
             <span aria-hidden="true" className="text-[18px] leading-none">
               ×
@@ -54,7 +58,7 @@ export function ComposePanel({ account, message, onClose }: ComposePanelProps) {
       </div>
       <textarea
         ref={bodyRef}
-        className="min-h-0 flex-1 resize-none border-0 px-4 py-4 text-[13.5px] leading-[1.55] text-text outline-none"
+        className="min-h-0 flex-1 resize-none border-0 px-4 py-4 text-[13.5px] leading-[1.55] text-text outline-none focus-visible:outline-none"
         defaultValue={
           message
             ? `${message.sender}님, 자료 잘 받았습니다. 첨부해 주신 로드맵 확인했고 몇 가지 코멘트 남겼습니다.\n\nMIME charset 변환 작업을 앞당긴 부분 특히 좋아요 — EUC-KR 메일 테스트 케이스를 제가 몇 개 더 준비해 두겠습니다.`

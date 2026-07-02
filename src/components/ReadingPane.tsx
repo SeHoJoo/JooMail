@@ -41,7 +41,7 @@ export function ReadingPane({ message, mode, onRetry, onReply }: ReadingPaneProp
             <div className="mt-1 text-[11px]">{message.time === "오전 9:14" ? "3분 전" : message.time}</div>
           </div>
         </div>
-        <div className="mt-6 flex items-center gap-2">
+        <div className="mt-[18px] flex items-center gap-2">
           <ActionButton icon="reply" label="답장" onClick={onReply} />
           <ActionButton icon="replyAll" label="전체답장" onClick={onReply} />
           <ActionButton icon="forward" label="전달" onClick={onReply} />
@@ -116,8 +116,8 @@ export function ReadingPane({ message, mode, onRetry, onReply }: ReadingPaneProp
 
 function ActionButton({ icon, label, onClick }: { icon: "reply" | "replyAll" | "forward"; label: string; onClick: () => void }) {
   return (
-    <button className="flex items-center gap-1.5 rounded-[7px] border border-line bg-white px-3 py-[7px] text-[12.5px] font-medium text-text" onClick={onClick}>
-      <Icon name={icon} className="h-3.5 w-3.5" />
+    <button className="flex h-8 items-center gap-[7px] rounded-[7px] border border-line bg-white px-[13px] text-[13px] font-medium text-text hover:border-[#d0d4d9] hover:bg-[#f6f7f8]" onClick={onClick}>
+      <Icon name={icon} className="h-[15px] w-[15px]" />
       {label}
     </button>
   );

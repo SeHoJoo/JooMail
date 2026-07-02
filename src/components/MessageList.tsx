@@ -23,10 +23,10 @@ export function MessageList({ title, unreadCount, messages, selectedId, checkedI
   return (
     <section className="flex min-w-[320px] shrink-0 flex-col border-r border-line bg-white" style={{ width: "var(--list-width)" }}>
       {checkedCount > 0 ? (
-        <div className="m-3 mb-0 flex h-10 items-center rounded-lg bg-selected px-3 text-accent">
+        <div className="flex h-11 items-center border-b border-line bg-selected px-4 text-accent">
           <input className="h-[15px] w-[15px] accent-accent" checked readOnly type="checkbox" />
           <span className="ml-3 text-[13px] font-medium">{checkedCount}개 선택됨</span>
-          <div className="ml-auto flex gap-5 text-[#3a3f45]">
+          <div className="ml-auto flex gap-4 text-[#3a3f45]">
             <button aria-label="선택 메일 보관">
               <Icon name="archive" className="h-4 w-4" />
             </button>
