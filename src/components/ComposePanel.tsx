@@ -30,7 +30,10 @@ export function ComposePanel({ accounts, account, mode, message, onClose, onSend
   const [attachments, setAttachments] = useState<MockAttachment[]>([]);
   const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [sendError, setSendError] = useState("");
+  const [draftNotice, setDraftNotice] = useState("");
   const [sending, setSending] = useState(false);
+  const [minimized, setMinimized] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const fromAccount = accounts.find((item) => item.id === fromAccountId) ?? account;
 
   useEffect(() => {
@@ -50,8 +53,10 @@ export function ComposePanel({ accounts, account, mode, message, onClose, onSend
     setSubject(initial.subject);
     setBody(initial.body);
     setSendError("");
+    setDraftNotice("");
     setAttachments([]);
     setAttachmentFiles([]);
+    setMinimized(false);
   }, [account.email, message, mode]);
 
   function handleFiles(files: FileList | null) {
@@ -66,6 +71,7 @@ export function ComposePanel({ accounts, account, mode, message, onClose, onSend
     if (!onSend || sending) return;
     setSending(true);
     setSendError("");
+    setDraftNotice("");
     try {
       await onSend({
         fromAccountId,
@@ -85,15 +91,40 @@ export function ComposePanel({ accounts, account, mode, message, onClose, onSend
     }
   }
 
+  function showDraftDeferredNotice() {
+    setSendError("");
+    setDraftNotice("임시저장은 서버 Drafts 저장 지원이 추가된 뒤 사용할 수 있습니다.");
+  }
+
+  if (minimized) {
+    return (
+      <section className="fixed bottom-[15px] right-5 z-40 hidden h-[38px] w-[320px] items-center rounded-t-[10px] bg-[#1e2126] px-4 text-white shadow-compose md:flex" data-compose-panel>
+        <button className="min-w-0 flex-1 truncate text-left text-[13px] font-medium" onClick={() => setMinimized(false)} type="button">
+          {subject.trim() || composeTitle(mode)}
+        </button>
+        <button className="ml-2 flex h-7 w-7 items-center justify-center rounded-md hover:bg-white/10" aria-label="작성 다시 열기" onClick={() => setMinimized(false)} type="button">
+          <Icon name="expand" className="h-3.5 w-3.5" />
+        </button>
+        <button className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-white/10" aria-label="작성 닫기" onClick={onClose} type="button">
+          <Icon name="close" className="h-3.5 w-3.5" />
+        </button>
+      </section>
+    );
+  }
+
   return (
-    <section className="fixed inset-0 z-40 flex flex-col bg-white md:inset-auto md:bottom-[15px] md:right-5 md:h-[599px] md:w-[580px] md:rounded-[10px] md:shadow-compose" data-compose-panel>
+    <section className={expanded ? "fixed inset-0 z-40 flex flex-col bg-white md:inset-[48px] md:rounded-[10px] md:shadow-compose" : "fixed inset-0 z-40 flex flex-col bg-white md:inset-auto md:bottom-[15px] md:right-5 md:h-[599px] md:w-[580px] md:rounded-[10px] md:shadow-compose"} data-compose-panel>
       <div className="flex h-[38px] shrink-0 items-center bg-[#1e2126] px-4 text-white md:rounded-t-[10px]">
         <div className="text-[13px] font-medium">{composeTitle(mode)}</div>
         <div className="ml-auto flex items-center gap-1.5">
-          <button className="flex h-7 w-7 items-center justify-center rounded-md bg-white/10 hover:bg-white/15 md:bg-transparent md:hover:bg-white/10" aria-label="작성 닫기" onClick={onClose}>
-            <span aria-hidden="true" className="text-[18px] leading-none">
-              ×
-            </span>
+          <button className="hidden h-7 w-7 items-center justify-center rounded-md hover:bg-white/10 md:flex" aria-label="작성 최소화" onClick={() => setMinimized(true)} type="button">
+            <Icon name="minimize" className="h-3.5 w-3.5" />
+          </button>
+          <button className="hidden h-7 w-7 items-center justify-center rounded-md hover:bg-white/10 md:flex" aria-label={expanded ? "작성 축소" : "작성 확대"} onClick={() => setExpanded((value) => !value)} type="button">
+            <Icon name={expanded ? "minimize" : "expand"} className="h-3.5 w-3.5" />
+          </button>
+          <button className="flex h-7 w-7 items-center justify-center rounded-md bg-white/10 hover:bg-white/15 md:bg-transparent md:hover:bg-white/10" aria-label="작성 닫기" onClick={onClose} type="button">
+            <Icon name="close" className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
@@ -178,6 +209,9 @@ export function ComposePanel({ accounts, account, mode, message, onClose, onSend
       {sendError ? (
         <div className="shrink-0 border-t border-[#f4d3d0] bg-[#fdf1f0] px-4 py-2 text-[12.5px] font-medium text-[#b23a30]">{sendError}</div>
       ) : null}
+      {!sendError && draftNotice ? (
+        <div className="shrink-0 border-t border-line bg-[#f7f8f9] px-4 py-2 text-[12.5px] text-muted">{draftNotice}</div>
+      ) : null}
       {attachments.length ? (
         <div className="shrink-0 border-t border-line px-4 py-2">
           <div className="mb-1 text-[11px] text-muted">첨부파일 {attachments.length}개</div>
@@ -202,6 +236,10 @@ export function ComposePanel({ accounts, account, mode, message, onClose, onSend
             <Icon name="paperclip" className="h-[15px] w-[15px]" />
           </button>
         </div>
+        <button className="ml-5 hidden text-[12px] font-medium text-muted hover:text-text sm:block" onClick={showDraftDeferredNotice} type="button">
+          임시저장
+        </button>
+        <div className="ml-4 hidden text-[11px] text-muted sm:block">{draftNotice ? "임시저장 대기" : "작성 중"}</div>
         <input ref={fileInputRef} className="hidden" type="file" multiple onChange={(event) => handleFiles(event.target.files)} />
         <button className="ml-auto flex h-[18px] w-[18px] items-center justify-center text-muted hover:text-text sm:ml-5" aria-label="작성 삭제" onClick={onClose} type="button">
           <Icon name="trash" className="h-[15px] w-[15px]" />

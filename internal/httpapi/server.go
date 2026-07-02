@@ -62,6 +62,7 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "failed to load accounts")
 		return
 	}
+	mailboxes = client.withUnreadCounts(mailboxes)
 	writeJSON(w, http.StatusOK, map[string]any{"accounts": []Account{s.accountForSession(auth.credential.Email, mailboxes)}})
 }
 
@@ -87,7 +88,12 @@ func (s *Server) handleMessageSummaries(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer client.Close()
-	messages, err := client.messageSummaries(accountID, mailboxID, r.URL.Query().Get("q"))
+	scope, err := parseMessageSearchScope(r.URL.Query().Get("scope"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid search scope")
+		return
+	}
+	messages, err := client.messageSummaries(accountID, mailboxID, r.URL.Query().Get("q"), scope)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to load messages")
 		return

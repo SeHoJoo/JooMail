@@ -25,7 +25,10 @@ import (
 	"golang.org/x/text/transform"
 )
 
-const imapCommandTimeout = 10 * time.Second
+const (
+	imapCommandTimeout  = 10 * time.Second
+	messageSummaryLimit = 50
+)
 
 var remoteImageSrcPattern = regexp.MustCompile(`(?i)(<img\b[^>]*?)\s+src\s*=\s*("https?://[^"]*"|'https?://[^']*'|https?://[^\s>]+)`)
 var cidImageSrcPattern = regexp.MustCompile(`(?i)(<img\b[^>]*?)\s+src\s*=\s*("cid:[^"]+"|'cid:[^']+'|cid:[^\s>]+)`)
@@ -57,6 +60,13 @@ type mailboxListEntry struct {
 	delimiter string
 	noselect  bool
 }
+
+type messageSearchScope string
+
+const (
+	messageSearchScopeMailbox messageSearchScope = "mailbox"
+	messageSearchScopeAccount messageSearchScope = "account"
+)
 
 type AttachmentPayload struct {
 	Name        string
@@ -199,29 +209,61 @@ func (c *imapClient) appendMessage(mailboxName string, raw string) error {
 	return nil
 }
 
-func (c *imapClient) messageSummaries(accountID string, mailboxID string, query string) ([]MessageSummary, error) {
+func (c *imapClient) messageSummaries(accountID string, mailboxID string, query string, scope messageSearchScope) ([]MessageSummary, error) {
 	mailboxName, err := decodeMailboxID(mailboxID)
 	if err != nil {
 		return nil, err
 	}
-	uids, err := c.searchMailbox(mailboxName)
+	query = strings.TrimSpace(query)
+	if scope == messageSearchScopeAccount && query != "" {
+		return c.accountMessageSummaries(accountID, query)
+	}
+	uids, err := c.searchMailbox(mailboxName, query)
 	if err != nil {
 		return nil, err
 	}
-	if len(uids) > 50 {
-		uids = uids[:50]
+	if len(uids) > messageSummaryLimit {
+		uids = uids[:messageSummaryLimit]
 	}
 	messages, err := c.fetchMessages(accountID, mailboxID, mailboxName, uids)
 	if err != nil {
 		return nil, err
 	}
 	sortMessagesNewestFirst(messages)
-	query = strings.ToLower(strings.TrimSpace(query))
 	summaries := make([]MessageSummary, 0, len(messages))
 	for _, message := range messages {
-		if query != "" && !messageMatches(message, query) {
-			continue
+		summaries = append(summaries, message.MessageSummary)
+	}
+	return summaries, nil
+}
+
+func (c *imapClient) accountMessageSummaries(accountID string, query string) ([]MessageSummary, error) {
+	mailboxNames, err := c.listMailboxNames()
+	if err != nil {
+		return nil, err
+	}
+	var messages []Message
+	for _, mailboxName := range mailboxNames {
+		mailboxID := mailboxID(mailboxName)
+		uids, err := c.searchMailbox(mailboxName, query)
+		if err != nil {
+			return nil, err
 		}
+		if len(uids) > messageSummaryLimit {
+			uids = uids[:messageSummaryLimit]
+		}
+		mailboxMessages, err := c.fetchMessages(accountID, mailboxID, mailboxName, uids)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, mailboxMessages...)
+	}
+	sortMessagesNewestFirst(messages)
+	if len(messages) > messageSummaryLimit {
+		messages = messages[:messageSummaryLimit]
+	}
+	summaries := make([]MessageSummary, 0, len(messages))
+	for _, message := range messages {
 		summaries = append(summaries, message.MessageSummary)
 	}
 	return summaries, nil
@@ -407,15 +449,18 @@ func (c *imapClient) copyThenDeleteMessage(uid string, targetMailboxName string)
 	return nil
 }
 
-func (c *imapClient) searchMailbox(mailboxName string) ([]string, error) {
+func (c *imapClient) searchMailbox(mailboxName string, query string) ([]string, error) {
 	if responses, err := c.command("SELECT %s", quoteIMAPString(mailboxName)); err != nil {
 		return nil, err
 	} else if taggedStatus(responses) != "OK" {
 		return nil, errors.New("select failed")
 	}
-	responses, err := c.command("UID SEARCH ALL")
+	responses, err := c.command("UID SEARCH %s", searchCriteria(query))
 	if err != nil {
 		return nil, err
+	}
+	if taggedStatus(responses) != "OK" {
+		return nil, errors.New("search failed")
 	}
 	var uids []int
 	for _, response := range responses {
@@ -435,6 +480,105 @@ func (c *imapClient) searchMailbox(mailboxName string) ([]string, error) {
 		out[i] = strconv.Itoa(uid)
 	}
 	return out, nil
+}
+
+func searchCriteria(query string) string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "ALL"
+	}
+	criterion := "TEXT " + quoteIMAPString(query)
+	if isASCII(query) {
+		return criterion
+	}
+	return "CHARSET UTF-8 " + criterion
+}
+
+func isASCII(value string) bool {
+	for _, r := range value {
+		if r > 127 {
+			return false
+		}
+	}
+	return true
+}
+
+func parseMessageSearchScope(value string) (messageSearchScope, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", string(messageSearchScopeMailbox):
+		return messageSearchScopeMailbox, nil
+	case string(messageSearchScopeAccount):
+		return messageSearchScopeAccount, nil
+	default:
+		return "", errors.New("invalid search scope")
+	}
+}
+
+func (c *imapClient) withUnreadCounts(mailboxes []Mailbox) []Mailbox {
+	counts := make(map[string]int)
+	for _, mailbox := range flattenSelectableMailboxes(mailboxes) {
+		name, err := decodeMailboxID(mailbox.ID)
+		if err != nil {
+			continue
+		}
+		count, err := c.mailboxUnreadCount(name)
+		if err != nil {
+			continue
+		}
+		counts[mailbox.ID] = count
+	}
+	return applyUnreadCounts(mailboxes, counts)
+}
+
+func (c *imapClient) mailboxUnreadCount(mailboxName string) (int, error) {
+	responses, err := c.command("STATUS %s (UNSEEN)", quoteIMAPString(mailboxName))
+	if err != nil {
+		return 0, err
+	}
+	if taggedStatus(responses) != "OK" {
+		return 0, errors.New("status failed")
+	}
+	for _, response := range responses {
+		if count, ok := parseUnreadStatus(response.line); ok {
+			return count, nil
+		}
+	}
+	return 0, nil
+}
+
+func flattenSelectableMailboxes(mailboxes []Mailbox) []Mailbox {
+	var out []Mailbox
+	for _, mailbox := range mailboxes {
+		if mailbox.Selectable {
+			out = append(out, mailbox)
+		}
+		out = append(out, flattenSelectableMailboxes(mailbox.Children)...)
+	}
+	return out
+}
+
+func applyUnreadCounts(mailboxes []Mailbox, counts map[string]int) []Mailbox {
+	out := make([]Mailbox, len(mailboxes))
+	for i, mailbox := range mailboxes {
+		mailbox.Unread = counts[mailbox.ID]
+		mailbox.Children = applyUnreadCounts(mailbox.Children, counts)
+		out[i] = mailbox
+	}
+	return out
+}
+
+func parseUnreadStatus(line string) (int, bool) {
+	upper := strings.ToUpper(line)
+	index := strings.Index(upper, "UNSEEN")
+	if !strings.HasPrefix(upper, "* STATUS ") || index == -1 {
+		return 0, false
+	}
+	fields := strings.Fields(line[index:])
+	if len(fields) < 2 {
+		return 0, false
+	}
+	count, err := strconv.Atoi(strings.Trim(fields[1], "()"))
+	return count, err == nil
 }
 
 func (c *imapClient) fetchMessages(accountID string, mailboxID string, mailboxName string, uids []string) ([]Message, error) {

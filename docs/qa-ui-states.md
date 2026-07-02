@@ -1,6 +1,6 @@
 # QA UI states
 
-Use this checklist when capturing visual QA screenshots for the mock UI state routes.
+Use this checklist when capturing visual QA screenshots for development-only UI state routes.
 
 ## Setup
 
@@ -61,8 +61,14 @@ Open the JooMail dev server. For each route in docs/qa-ui-states.md, capture scr
 - Multiselect state shows the selected-count bar and checked rows without overlapping unread dots or avatars.
 - Desktop and mobile message rows keep checkbox, unread dot, avatar, sender, subject, and snippet anchors fixed between normal, selected, hover, and multiselect states.
 - Compose state does not overlap controls; textarea focus does not draw an oversized blue outline.
-- Compose `From` opens the mock account menu, Cc/Bcc expands local input rows, and the paperclip button displays selected file names and sizes without uploading.
+- Compose `From` opens the account menu, Cc/Bcc expands local input rows, and the paperclip button displays selected file names and sizes before send.
 - Reading pane recipient details, remote-image display, and quoted conversation controls toggle local UI state only.
 - Reply opened with `r` keeps the recipient chip and `Re:` subject.
 - Global shortcuts are ignored while an input, select, or textarea has focus; `c`, `r`, `x`, `j/k`, and `Escape` keep the normal inbox behavior.
 - Reply, reply-all, forward, compose header, and list controls keep even spacing.
+
+## QA Results Log
+
+| Date | Viewports | Routes | Screenshot location | Result | Notes |
+|---|---|---|---|---|---|
+| 2026-07-03 | Pending | All documented routes | Pending | Deferred | Browser screenshot capture was not run in this batch because the workspace has no browser automation dependency and adding one requires approval. Use the setup and route table above before release review; do not commit screenshots unless requested. |

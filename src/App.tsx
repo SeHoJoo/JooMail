@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { accounts as mockAccounts, messages as mockMessages } from "./data";
-import type { Account, ComposeDraft, ComposeMode, Mailbox, Message, MockMode } from "./types";
+import type { Account, ComposeDraft, ComposeMode, Mailbox, Message, MockMode, SearchScope } from "./types";
 import { ComposePanel } from "./components/ComposePanel";
 import { MessageList } from "./components/MessageList";
 import { MobileInbox } from "./components/MobileInbox";
@@ -15,6 +15,7 @@ import { AddAccountModal } from "./components/AddAccountModal";
 const LIST_WIDTH_KEY = "joomail:list-width";
 const REMOTE_IMAGES_KEY = "joomail:remote-images";
 const ACCOUNT_NAMES_KEY = "joomail:account-names";
+const MAIL_STATE_KEY = "joomail:mail-state";
 const DEFAULT_LIST_WIDTH = 388;
 const QA_STATES: QaState[] = ["normal", "loading", "error", "empty", "empty-reading", "search", "search-empty", "multiselect", "compose"];
 const SEARCH_QA_QUERY = "MIME";
@@ -67,12 +68,18 @@ type AppShellProps = {
 
 export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   const useApi = Boolean(initialAccounts);
-  const [accounts, setAccounts] = useState<Account[]>(initialAccounts ?? mockAccounts);
-  const [accountId, setAccountId] = useState((initialAccounts ?? mockAccounts)[0].id);
-  const [mailboxId, setMailboxId] = useState("inbox");
-  const [selectedMessageId, setSelectedMessageId] = useState(useApi ? "" : "m1");
+  const initialAccountList = initialAccounts ?? mockAccounts;
+  const restoredMailState = loadMailState(initialAccountList);
+  const initialAccountId = restoredMailState.activeAccountId ?? initialAccountList[0].id;
+  const initialMailboxId = restoredMailState.byAccount[initialAccountId]?.mailboxId ?? "inbox";
+  const [accounts, setAccounts] = useState<Account[]>(initialAccountList);
+  const [accountId, setAccountId] = useState(initialAccountId);
+  const [mailboxId, setMailboxId] = useState(initialMailboxId);
+  const [selectedMessageId, setSelectedMessageId] = useState(useApi ? restoredMailState.byAccount[initialAccountId]?.messageId ?? "" : restoredMailState.byAccount[initialAccountId]?.messageId ?? "m1");
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
+  const [searchScope, setSearchScope] = useState<SearchScope>(restoredMailState.searchScope);
+  const [mailStateByAccount, setMailStateByAccount] = useState<Record<string, AccountMailState>>(restoredMailState.byAccount);
   const [composeOpen, setComposeOpen] = useState(false);
   const [replyMessageId, setReplyMessageId] = useState<string | null>(null);
   const [composeMode, setComposeMode] = useState<ComposeMode>("compose");
@@ -99,12 +106,13 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     const accountMessages = mockMessages.filter((message) => message.accountId === accountId);
     if (search.trim()) {
       const query = search.trim().toLowerCase();
-      return accountMessages.filter((message) =>
+      const scopedMessages = searchScope === "account" ? accountMessages : accountMessages.filter((message) => message.mailboxId === mailboxId);
+      return scopedMessages.filter((message) =>
         [message.sender, message.subject, message.snippet, ...message.body].some((field) => field.toLowerCase().includes(query)),
       );
     }
     return accountMessages.filter((message) => message.mailboxId === mailboxId);
-  }, [accountId, apiMessages, forceEmptyList, mailboxId, search, useApi]);
+  }, [accountId, apiMessages, forceEmptyList, mailboxId, search, searchScope, useApi]);
 
   const selectedMessage = useApi ? selectedMessageDetail ?? visibleMessages.find((message) => message.id === selectedMessageId) : visibleMessages.find((message) => message.id === selectedMessageId);
   const composeMessage = replyMessageId
@@ -130,11 +138,24 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   }, [accountNames]);
 
   useEffect(() => {
+    const nextState = {
+      activeAccountId: accountId,
+      searchScope,
+      byAccount: {
+        ...mailStateByAccount,
+        [accountId]: { mailboxId, messageId: selectedMessageId },
+      },
+    };
+    localStorage.setItem(MAIL_STATE_KEY, JSON.stringify(nextState));
+    setMailStateByAccount(nextState.byAccount);
+  }, [accountId, mailboxId, selectedMessageId, searchScope]);
+
+  useEffect(() => {
     if (!useApi) return;
     let cancelled = false;
     setMode("loading");
     setSelectedMessageDetail(undefined);
-    apiJSON<{ messages: ApiMessage[] }>(`/api/accounts/${encodeURIComponent(accountId)}/mailboxes/${encodeURIComponent(mailboxId)}/messages${search ? `?q=${encodeURIComponent(search)}` : ""}`)
+    apiJSON<{ messages: ApiMessage[] }>(messageSummariesPath(accountId, mailboxId, search, searchScope))
       .then((body) => {
         if (cancelled) return;
         const nextMessages = body.messages.map(summaryToMessage);
@@ -155,7 +176,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     return () => {
       cancelled = true;
     };
-  }, [accountId, mailboxId, onSessionExpired, reloadToken, search, useApi]);
+  }, [accountId, mailboxId, onSessionExpired, reloadToken, search, searchScope, useApi]);
 
   useEffect(() => {
     if (!useApi || !selectedMessageId) {
@@ -301,6 +322,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     setMode(nextState === "loading" || nextState === "error" ? nextState : "normal");
     setMailboxId("inbox");
     setSearch("");
+    setSearchScope("mailbox");
     setCheckedIds(new Set());
     setReplyMessageId(null);
     setComposeMode("compose");
@@ -326,13 +348,14 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   }
 
   function selectAccount(nextAccountId: string) {
+    const restored = mailStateByAccount[nextAccountId];
     setAccountId(nextAccountId);
-    setMailboxId("inbox");
+    setMailboxId(restored?.mailboxId ?? "inbox");
+    setSelectedMessageId(restored?.messageId ?? "");
     setForceEmptyList(false);
     setCheckedIds(new Set());
     if (useApi) {
       setSearch("");
-      setSelectedMessageId("");
       return;
     }
     triggerLoading();
@@ -345,8 +368,10 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     setSearch("");
     setForceEmptyList(false);
     setCheckedIds(new Set());
+    const restored = mailStateByAccount[accountId];
+    const restoredMessageId = restored?.mailboxId === nextMailboxId ? restored.messageId : "";
     if (useApi) {
-      setSelectedMessageId("");
+      setSelectedMessageId(restoredMessageId);
       return;
     }
     setMode(nextMailboxId === "spam" ? "error" : "loading");
@@ -372,6 +397,11 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   function handleSearch(nextSearch: string) {
     setForceEmptyList(false);
     setSearch(nextSearch);
+  }
+
+  function handleSearchScope(nextScope: SearchScope) {
+    setForceEmptyList(false);
+    setSearchScope(nextScope);
   }
 
   function openCompose() {
@@ -636,12 +666,14 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         selectedMailboxId={mailboxId}
         checkedIds={checkedIds}
         search={search}
+        searchScope={searchScope}
         mode={mode}
         showRemoteImagesByDefault={showRemoteImagesByDefault}
         onRetry={retry}
         onCompose={openCompose}
         onReply={(messageId) => openReply("reply", messageId)}
         onSearch={handleSearch}
+        onSearchScopeChange={handleSearchScope}
         onSelectMessage={setSelectedMessageId}
         onSelectMailbox={selectMailbox}
         onToggleChecked={toggleChecked}
@@ -672,8 +704,10 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
             selectedId={selectedMessage?.id}
             checkedIds={checkedIds}
             search={search}
+            searchScope={searchScope}
             mode={mode}
             onRetry={retry}
+            onSearchScopeChange={handleSearchScope}
             onSelectMessage={setSelectedMessageId}
             onToggleAllChecked={toggleAllChecked}
             onToggleChecked={toggleChecked}
@@ -773,6 +807,45 @@ function normalizeMessage(message: ApiMessage): Message {
     ...message,
     body: message.textBody ?? message.body ?? [],
   };
+}
+
+type AccountMailState = {
+  mailboxId: string;
+  messageId: string;
+};
+
+type StoredMailState = {
+  activeAccountId: string;
+  searchScope: SearchScope;
+  byAccount: Record<string, AccountMailState>;
+};
+
+function messageSummariesPath(accountId: string, mailboxId: string, search: string, searchScope: SearchScope) {
+  const params = new URLSearchParams();
+  if (search.trim()) {
+    params.set("q", search.trim());
+    params.set("scope", searchScope);
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return `/api/accounts/${encodeURIComponent(accountId)}/mailboxes/${encodeURIComponent(mailboxId)}/messages${suffix}`;
+}
+
+function loadMailState(accounts: Account[]): StoredMailState {
+  const fallbackAccountId = accounts[0]?.id ?? "";
+  const fallback = { activeAccountId: fallbackAccountId, searchScope: "mailbox" as SearchScope, byAccount: {} };
+  try {
+    const raw = localStorage.getItem(MAIL_STATE_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Partial<StoredMailState>;
+    const activeAccountId = accounts.some((account) => account.id === parsed.activeAccountId) ? parsed.activeAccountId ?? fallbackAccountId : fallbackAccountId;
+    return {
+      activeAccountId,
+      searchScope: parsed.searchScope === "account" ? "account" : "mailbox",
+      byAccount: typeof parsed.byAccount === "object" && parsed.byAccount ? parsed.byAccount : {},
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 function flattenMailboxes(mailboxes: Mailbox[]): Mailbox[] {
