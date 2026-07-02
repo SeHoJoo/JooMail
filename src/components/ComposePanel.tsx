@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import type { Account, ComposeDraft, Message } from "../types";
+import type { Account, ComposeDraft, ComposeMode, Message } from "../types";
 import { Icon } from "./Icon";
 
 type ComposePanelProps = {
   accounts: Account[];
   account: Account;
+  mode: ComposeMode;
   message?: Message;
   onClose: () => void;
   onSend?: (draft: ComposeDraft) => Promise<void>;
@@ -15,22 +16,19 @@ type MockAttachment = {
   size: string;
 };
 
-export function ComposePanel({ accounts, account, message, onClose, onSend }: ComposePanelProps) {
+export function ComposePanel({ accounts, account, mode, message, onClose, onSend }: ComposePanelProps) {
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fromAccountId, setFromAccountId] = useState(account.id);
   const [fromMenuOpen, setFromMenuOpen] = useState(false);
   const [showCcBcc, setShowCcBcc] = useState(false);
-  const [recipientText, setRecipientText] = useState("");
-  const [ccText, setCcText] = useState("");
+  const [recipientText, setRecipientText] = useState(() => composeInitialState(mode, message, account.email).to);
+  const [ccText, setCcText] = useState(() => composeInitialState(mode, message, account.email).cc);
   const [bccText, setBccText] = useState("");
-  const [subject, setSubject] = useState(() => (message ? `Re: ${message.subject}` : ""));
-  const [body, setBody] = useState(() =>
-    message
-      ? `${message.sender}님, 자료 잘 받았습니다.\n\n`
-      : "",
-  );
+  const [subject, setSubject] = useState(() => composeInitialState(mode, message, account.email).subject);
+  const [body, setBody] = useState(() => composeInitialState(mode, message, account.email).body);
   const [attachments, setAttachments] = useState<MockAttachment[]>([]);
+  const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [sendError, setSendError] = useState("");
   const [sending, setSending] = useState(false);
   const fromAccount = accounts.find((item) => item.id === fromAccountId) ?? account;
@@ -44,18 +42,23 @@ export function ComposePanel({ accounts, account, message, onClose, onSend }: Co
   }, [account.id]);
 
   useEffect(() => {
-    setRecipientText("");
-    setCcText("");
+    const initial = composeInitialState(mode, message, account.email);
+    setRecipientText(initial.to);
+    setCcText(initial.cc);
     setBccText("");
-    setShowCcBcc(false);
-    setSubject(message ? `Re: ${message.subject}` : "");
-    setBody(message ? `${message.sender}님, 자료 잘 받았습니다.\n\n` : "");
+    setShowCcBcc(Boolean(initial.cc));
+    setSubject(initial.subject);
+    setBody(initial.body);
     setSendError("");
-  }, [message]);
+    setAttachments([]);
+    setAttachmentFiles([]);
+  }, [account.email, message, mode]);
 
   function handleFiles(files: FileList | null) {
     if (!files?.length) return;
-    setAttachments(Array.from(files).map((file) => ({ name: file.name, size: formatFileSize(file.size) })));
+    const nextFiles = Array.from(files);
+    setAttachmentFiles((current) => [...current, ...nextFiles]);
+    setAttachments((current) => [...current, ...nextFiles.map((file) => ({ name: file.name, size: formatFileSize(file.size) }))]);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -71,6 +74,7 @@ export function ComposePanel({ accounts, account, message, onClose, onSend }: Co
         bcc: parseRecipients(bccText),
         subject,
         textBody: body,
+        attachments: attachmentFiles,
       });
       onClose();
     } catch {
@@ -83,14 +87,8 @@ export function ComposePanel({ accounts, account, message, onClose, onSend }: Co
   return (
     <section className="fixed inset-0 z-40 flex flex-col bg-white md:inset-auto md:bottom-[15px] md:right-5 md:h-[599px] md:w-[580px] md:rounded-[10px] md:shadow-compose" data-compose-panel>
       <div className="flex h-[38px] shrink-0 items-center bg-[#1e2126] px-4 text-white md:rounded-t-[10px]">
-        <div className="text-[13px] font-medium">{message ? "답장" : "새 메일"}</div>
+        <div className="text-[13px] font-medium">{composeTitle(mode)}</div>
         <div className="ml-auto flex items-center gap-1.5">
-          <span className="hidden h-7 w-7 items-center justify-center md:flex" aria-hidden="true">
-            <Icon name="minimize" className="h-3.5 w-3.5" />
-          </span>
-          <span className="hidden h-7 w-7 items-center justify-center md:flex" aria-hidden="true">
-            <Icon name="expand" className="h-3.5 w-3.5" />
-          </span>
           <button className="flex h-7 w-7 items-center justify-center rounded-md bg-white/10 hover:bg-white/15 md:bg-transparent md:hover:bg-white/10" aria-label="작성 닫기" onClick={onClose}>
             <span aria-hidden="true" className="text-[18px] leading-none">
               ×
@@ -140,19 +138,13 @@ export function ComposePanel({ accounts, account, message, onClose, onSend }: Co
         <label className="w-[90px] shrink-0 text-xs text-muted" htmlFor="compose-to">
           받는사람
         </label>
-        {message ? (
-          <span className="flex max-w-[120px] shrink-0 items-center gap-1.5 rounded-md bg-[#eceef1] px-2.5 py-1 text-[12.5px] text-text md:max-w-[180px]">
-            <span className="truncate">{message.sender}</span>
-            <span className="text-xs text-muted">×</span>
-          </span>
-        ) : null}
         <input
           id="compose-to"
-          className="ml-3 min-w-0 flex-1 border-0 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-muted focus-visible:outline-none"
+          className="min-w-0 flex-1 border-0 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-muted focus-visible:outline-none"
           value={recipientText}
           onChange={(event) => setRecipientText(event.target.value)}
           aria-label="받는사람"
-          placeholder={message ? "" : "이름 또는 이메일 입력..."}
+          placeholder="이름 또는 이메일 입력..."
         />
         <button className="ml-2 shrink-0 text-xs text-accent" onClick={() => setShowCcBcc((show) => !show)} type="button">
           참조/숨은참조
@@ -208,12 +200,11 @@ export function ComposePanel({ accounts, account, message, onClose, onSend }: Co
           <button className="flex h-[18px] w-[18px] items-center justify-center hover:text-text" aria-label="파일 첨부" onClick={() => fileInputRef.current?.click()} type="button">
             <Icon name="paperclip" className="h-[15px] w-[15px]" />
           </button>
-          <Icon name="bold" className="h-[15px] w-[15px]" />
-          <Icon name="italic" className="h-[15px] w-[15px]" />
         </div>
         <input ref={fileInputRef} className="hidden" type="file" multiple onChange={(event) => handleFiles(event.target.files)} />
-        <div className="ml-auto hidden text-[11px] text-muted sm:block">임시저장됨 · 오전 9:47</div>
-        <Icon name="trash" className="ml-auto h-[15px] w-[15px] text-muted sm:ml-5" />
+        <button className="ml-auto flex h-[18px] w-[18px] items-center justify-center text-muted hover:text-text sm:ml-5" aria-label="작성 삭제" onClick={onClose} type="button">
+          <Icon name="trash" className="h-[15px] w-[15px]" />
+        </button>
       </div>
     </section>
   );
@@ -248,4 +239,89 @@ function parseRecipients(value: string) {
     .split(/[,\n;]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function composeTitle(mode: ComposeMode) {
+  if (mode === "reply") return "답장";
+  if (mode === "replyAll") return "전체답장";
+  if (mode === "forward") return "전달";
+  return "새 메일";
+}
+
+function composeInitialState(mode: ComposeMode, message: Message | undefined, accountEmail: string) {
+  if (!message || mode === "compose") {
+    return { to: "", cc: "", subject: "", body: "" };
+  }
+
+  if (mode === "forward") {
+    return {
+      to: "",
+      cc: "",
+      subject: addSubjectPrefix("Fwd:", message.subject),
+      body: forwardedBody(message),
+    };
+  }
+
+  const self = accountEmail.toLowerCase();
+  const replyTo = normalizeAddress(message.senderEmail);
+  const to = mode === "replyAll"
+    ? uniqueAddresses([replyTo, ...(message.headers?.to ?? [])], self).join(", ")
+    : replyTo;
+  const cc = mode === "replyAll" ? uniqueAddresses(message.headers?.cc ?? [], self).join(", ") : "";
+
+  return {
+    to,
+    cc,
+    subject: addSubjectPrefix("Re:", message.subject),
+    body: replyBody(message),
+  };
+}
+
+function addSubjectPrefix(prefix: "Re:" | "Fwd:", subject: string) {
+  const normalized = subject.trim();
+  if (normalized.toLowerCase().startsWith(prefix.toLowerCase())) return normalized;
+  return `${prefix} ${normalized}`;
+}
+
+function replyBody(message: Message) {
+  return `\n\nOn ${message.fullDate}, ${message.sender} wrote:\n${quoteBody(message)}`;
+}
+
+function forwardedBody(message: Message) {
+  return [
+    "",
+    "",
+    "---------- Forwarded message ---------",
+    `From: ${message.sender} <${message.senderEmail}>`,
+    `Date: ${message.fullDate}`,
+    `Subject: ${message.subject}`,
+    "",
+    message.body.join("\n\n"),
+  ].join("\n");
+}
+
+function quoteBody(message: Message) {
+  const source = message.body.join("\n\n") || message.snippet;
+  return source
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+}
+
+function uniqueAddresses(values: string[], self: string) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  values.forEach((value) => {
+    const address = normalizeAddress(value);
+    const key = address.toLowerCase();
+    if (!address || key === self || seen.has(key)) return;
+    seen.add(key);
+    result.push(address);
+  });
+  return result;
+}
+
+function normalizeAddress(value: string) {
+  const match = value.match(/<([^>]+)>/);
+  return (match?.[1] ?? value).trim();
 }

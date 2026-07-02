@@ -9,6 +9,8 @@ type ReadingPaneProps = {
   mailboxes: Mailbox[];
   onRetry: () => void;
   onReply: () => void;
+  onReplyAll: () => void;
+  onForward: () => void;
   onToggleFlagged: (message: Message) => void;
   onArchive: (message: Message) => Promise<void> | void;
   onTrash: (message: Message) => Promise<void> | void;
@@ -16,7 +18,7 @@ type ReadingPaneProps = {
   onMarkUnread: (message: Message) => Promise<void> | void;
 };
 
-export function ReadingPane({ message, mode, mailboxes, onRetry, onReply, onToggleFlagged, onArchive, onTrash, onMove, onMarkUnread }: ReadingPaneProps) {
+export function ReadingPane({ message, mode, mailboxes, onRetry, onReply, onReplyAll, onForward, onToggleFlagged, onArchive, onTrash, onMove, onMarkUnread }: ReadingPaneProps) {
   const [recipientsOpen, setRecipientsOpen] = useState(false);
   const [quotedOpen, setQuotedOpen] = useState(false);
   const [showRemoteImages, setShowRemoteImages] = useState(false);
@@ -67,14 +69,15 @@ export function ReadingPane({ message, mode, mailboxes, onRetry, onReply, onTogg
               <span className="truncate text-[13px] text-muted">&lt;{message.senderEmail}&gt;</span>
             </div>
             <div className="mt-1 text-xs text-muted">
-              받는사람: 나 (jooseho@gmail.com) ·{" "}
+              받는사람: {formatHeaderRecipients(message.headers?.to) || "나"} ·{" "}
               <button className="font-medium text-accent" onClick={() => setRecipientsOpen((open) => !open)} type="button">
                 받는사람 {recipientsOpen ? "접기" : "보기"} {recipientsOpen ? "▴" : "▾"}
               </button>
             </div>
             {recipientsOpen ? (
               <div className="mt-2 rounded-lg border border-line bg-[#f7f8f9] px-3 py-2 text-xs leading-5 text-text">
-                <div>받는사람: 나 &lt;jooseho@gmail.com&gt;</div>
+                <div>받는사람: {formatHeaderRecipients(message.headers?.to) || "나"}</div>
+                {message.headers?.cc?.length ? <div>참조: {formatHeaderRecipients(message.headers.cc)}</div> : null}
                 <div>보낸사람: {message.sender} &lt;{message.senderEmail}&gt;</div>
                 <div>날짜: {message.fullDate}</div>
               </div>
@@ -87,8 +90,8 @@ export function ReadingPane({ message, mode, mailboxes, onRetry, onReply, onTogg
         </div>
         <div className="mt-[18px] flex items-center gap-2">
           <ActionButton icon="reply" label="답장" onClick={onReply} />
-          <ActionButton icon="replyAll" label="전체답장" onClick={onReply} />
-          <ActionButton icon="forward" label="전달" onClick={onReply} />
+          <ActionButton icon="replyAll" label="전체답장" onClick={onReplyAll} />
+          <ActionButton icon="forward" label="전달" onClick={onForward} />
           <div className="ml-auto flex gap-[5px] text-[#3a3f45]">
             <IconButton icon="archive" label="보관" onClick={() => runMessageAction(message, onArchive, setActionError, closeActionMenus)} />
             <IconButton icon="trash" label="삭제" onClick={() => runMessageAction(message, onTrash, setActionError, closeActionMenus)} />
@@ -188,7 +191,7 @@ export function ReadingPane({ message, mode, mailboxes, onRetry, onReply, onTogg
             <div className="mb-3 text-xs text-muted">첨부파일 {message.attachments.length}개 · 3.1 MB</div>
             <div className="flex flex-wrap gap-3">
               {message.attachments.map((attachment) => (
-                <div key={attachment.name} className="flex h-[52px] w-[220px] items-center rounded-lg border border-line bg-white px-2">
+                <a key={attachment.id ?? attachment.name} className="flex h-[52px] w-[220px] items-center rounded-lg border border-line bg-white px-2 hover:bg-[#f7f8f9]" href={attachment.id ? `/api/messages/${encodeURIComponent(message.id)}/attachments/${encodeURIComponent(attachment.id)}` : undefined} download={attachment.name}>
                   <div className={attachment.type === "pdf" ? "flex h-[34px] w-[34px] items-center justify-center rounded-md bg-[#fdecec] text-[#e9564f]" : "flex h-[34px] w-[34px] items-center justify-center rounded-md bg-[#eaf0f6] text-accent"}>
                     <Icon name={attachment.type === "image" ? "image" : "mail"} className="h-4 w-4" />
                   </div>
@@ -197,7 +200,7 @@ export function ReadingPane({ message, mode, mailboxes, onRetry, onReply, onTogg
                     <div className="text-[11px] text-muted">{attachment.size}</div>
                   </div>
                   <Icon name="download" className="h-3.5 w-3.5 text-muted" />
-                </div>
+                </a>
               ))}
             </div>
           </div>
@@ -264,4 +267,8 @@ async function runMessageAction(message: Message, action: (message: Message) => 
 function revealRemoteImages(html: string, show: boolean) {
   if (!show) return html;
   return html.replace(/\sdata-joomail-remote-src=/gi, " src=");
+}
+
+function formatHeaderRecipients(values: string[] | undefined) {
+  return (values ?? []).map((value) => value.trim()).filter(Boolean).join(", ");
 }

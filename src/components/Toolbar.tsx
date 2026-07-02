@@ -7,10 +7,9 @@ type ToolbarProps = {
   onSearch: (value: string) => void;
   onCompose: () => void;
   onRefresh: () => void;
-  onSettings: () => void;
 };
 
-export function Toolbar({ search, searchInputRef, onSearch, onCompose, onRefresh, onSettings }: ToolbarProps) {
+export function Toolbar({ search, searchInputRef, onSearch, onCompose, onRefresh }: ToolbarProps) {
   return (
     <header className="hidden h-[52px] shrink-0 items-center border-b border-line bg-white px-4 md:flex">
       <div className="flex items-center gap-4">
@@ -35,9 +34,6 @@ export function Toolbar({ search, searchInputRef, onSearch, onCompose, onRefresh
       <div className="ml-5 flex gap-6 text-[#3a3f45]">
         <button aria-label="새로고침" onClick={onRefresh} type="button">
           <Icon name="refresh" className="h-[17px] w-[17px]" />
-        </button>
-        <button aria-label="설정" onClick={onSettings} type="button">
-          <Icon name="settings" className="h-[17px] w-[17px]" />
         </button>
       </div>
     </header>

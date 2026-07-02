@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"mime"
 	"net/http"
 	"strings"
 )
@@ -34,6 +35,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/accounts", s.handleAccounts)
 	s.mux.HandleFunc("GET /api/accounts/{accountID}/mailboxes/{mailboxID}/messages", s.handleMessageSummaries)
 	s.mux.HandleFunc("GET /api/messages/{messageID}", s.handleMessage)
+	s.mux.HandleFunc("GET /api/messages/{messageID}/attachments/{attachmentID}", s.handleMessageAttachment)
 	s.mux.HandleFunc("PATCH /api/messages/{messageID}/flagged", s.handleMessageFlagged)
 	s.mux.HandleFunc("PATCH /api/messages/{messageID}/seen", s.handleMessageSeen)
 	s.mux.HandleFunc("POST /api/messages/{messageID}/move", s.handleMessageMove)
@@ -121,6 +123,40 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"message": message})
+}
+
+func (s *Server) handleMessageAttachment(w http.ResponseWriter, r *http.Request) {
+	auth, ok := s.requireCredential(w, r)
+	if !ok {
+		return
+	}
+	messageID := strings.TrimSpace(r.PathValue("messageID"))
+	attachmentID := strings.TrimSpace(r.PathValue("attachmentID"))
+	if messageID == "" || attachmentID == "" {
+		writeError(w, http.StatusBadRequest, "messageId and attachmentId are required")
+		return
+	}
+
+	client, err := openIMAPSession(s.config, auth.credential)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "failed to load attachment")
+		return
+	}
+	defer client.Close()
+	attachment, err := client.messageAttachment(messageID, attachmentID)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "failed to load attachment")
+		return
+	}
+
+	w.Header().Set("Content-Type", attachment.ContentType)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": attachment.Name}))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(attachment.Data)
 }
 
 func (s *Server) handleMessageFlagged(w http.ResponseWriter, r *http.Request) {

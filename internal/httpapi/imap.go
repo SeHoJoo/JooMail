@@ -43,6 +43,12 @@ type imapResponse struct {
 	literal []byte
 }
 
+type AttachmentPayload struct {
+	Name        string
+	ContentType string
+	Data        []byte
+}
+
 func openIMAPSession(config Config, credential storedCredential) (*imapClient, error) {
 	conn, err := dialIMAP(config)
 	if err != nil {
@@ -219,6 +225,37 @@ func (c *imapClient) message(accountID string, messageID string) (Message, error
 		message.Unread = false
 	}
 	return message, nil
+}
+
+func (c *imapClient) messageAttachment(messageID string, attachmentID string) (AttachmentPayload, error) {
+	mailboxID, uid, err := decodeMessageID(messageID)
+	if err != nil {
+		return AttachmentPayload{}, ErrNotFound
+	}
+	mailboxName, err := decodeMailboxID(mailboxID)
+	if err != nil {
+		return AttachmentPayload{}, ErrNotFound
+	}
+	if responses, err := c.command("SELECT %s", quoteIMAPString(mailboxName)); err != nil {
+		return AttachmentPayload{}, err
+	} else if taggedStatus(responses) != "OK" {
+		return AttachmentPayload{}, ErrNotFound
+	}
+	responses, err := c.command("UID FETCH %s (BODY.PEEK[])", uid)
+	if err != nil {
+		return AttachmentPayload{}, err
+	}
+	for _, response := range responses {
+		if len(response.literal) == 0 || parseUID(response.line) != uid {
+			continue
+		}
+		attachment, err := extractAttachmentPayload(response.literal, attachmentID)
+		if errors.Is(err, ErrNotFound) {
+			return AttachmentPayload{}, ErrNotFound
+		}
+		return attachment, err
+	}
+	return AttachmentPayload{}, ErrNotFound
 }
 
 func (c *imapClient) markMessageSeen(uid string) error {
@@ -770,6 +807,11 @@ func messageUID(id string) int {
 }
 
 func parseMessageBody(header mail.Header, body io.Reader) ([]string, string, []Attachment, bool) {
+	counter := 0
+	return parseMessageBodyWithCounter(header, body, &counter)
+}
+
+func parseMessageBodyWithCounter(header mail.Header, body io.Reader, counter *int) ([]string, string, []Attachment, bool) {
 	contentType := header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err == nil && strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
@@ -787,7 +829,7 @@ func parseMessageBody(header mail.Header, body io.Reader) ([]string, string, []A
 				break
 			}
 			partHeader := mail.Header(part.Header)
-			partText, partHTML, partAttachments, partRemoteImagesBlocked := parsePart(partHeader, part)
+			partText, partHTML, partAttachments, partRemoteImagesBlocked := parsePart(partHeader, part, counter)
 			text = append(text, partText...)
 			if partHTML != "" {
 				html = append(html, partHTML)
@@ -805,11 +847,11 @@ func parseMessageBody(header mail.Header, body io.Reader) ([]string, string, []A
 	return splitParagraphs(string(decoded)), "", nil, false
 }
 
-func parsePart(header mail.Header, body io.Reader) ([]string, string, []Attachment, bool) {
+func parsePart(header mail.Header, body io.Reader, counter *int) ([]string, string, []Attachment, bool) {
 	contentType := header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err == nil && strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
-		return parseMessageBody(header, body)
+		return parseMessageBodyWithCounter(header, body, counter)
 	}
 	disposition, dispositionParams, _ := mime.ParseMediaType(header.Get("Content-Disposition"))
 	filename := dispositionParams["filename"]
@@ -818,7 +860,10 @@ func parsePart(header mail.Header, body io.Reader) ([]string, string, []Attachme
 	}
 	decoded := decodePartBody(header, body)
 	if strings.EqualFold(disposition, "attachment") || filename != "" {
+		id := fmt.Sprintf("att_%d", *counter)
+		*counter++
 		return nil, "", []Attachment{{
+			ID:   id,
 			Name: decodeHeader(filename),
 			Size: formatBytes(len(decoded)),
 			Type: attachmentType(mediaType),
@@ -832,6 +877,63 @@ func parsePart(header mail.Header, body io.Reader) ([]string, string, []Attachme
 		return nil, html, nil, remoteImagesBlocked
 	}
 	return nil, "", nil, false
+}
+
+func extractAttachmentPayload(raw []byte, attachmentID string) (AttachmentPayload, error) {
+	msg, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		return AttachmentPayload{}, err
+	}
+	counter := 0
+	return findAttachmentPayload(msg.Header, msg.Body, attachmentID, &counter)
+}
+
+func findAttachmentPayload(header mail.Header, body io.Reader, attachmentID string, counter *int) (AttachmentPayload, error) {
+	contentType := header.Get("Content-Type")
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err == nil && strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
+		reader := multipart.NewReader(body, params["boundary"])
+		for {
+			part, err := reader.NextPart()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return AttachmentPayload{}, err
+			}
+			attachment, err := findAttachmentPayload(mail.Header(part.Header), part, attachmentID, counter)
+			if err == nil {
+				return attachment, nil
+			}
+			if !errors.Is(err, ErrNotFound) {
+				return AttachmentPayload{}, err
+			}
+		}
+		return AttachmentPayload{}, ErrNotFound
+	}
+	disposition, dispositionParams, _ := mime.ParseMediaType(header.Get("Content-Disposition"))
+	filename := dispositionParams["filename"]
+	if filename == "" {
+		filename = params["name"]
+	}
+	if !strings.EqualFold(disposition, "attachment") && filename == "" {
+		_, _ = io.Copy(io.Discard, body)
+		return AttachmentPayload{}, ErrNotFound
+	}
+	id := fmt.Sprintf("att_%d", *counter)
+	*counter++
+	decoded := decodePartBody(header, body)
+	if id != attachmentID {
+		return AttachmentPayload{}, ErrNotFound
+	}
+	if mediaType == "" {
+		mediaType = "application/octet-stream"
+	}
+	return AttachmentPayload{
+		Name:        decodeHeader(filename),
+		ContentType: mediaType,
+		Data:        decoded,
+	}, nil
 }
 
 func decodePartBody(header mail.Header, body io.Reader) []byte {

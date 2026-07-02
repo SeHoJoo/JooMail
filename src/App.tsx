@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { accounts as mockAccounts, messages as mockMessages } from "./data";
-import type { Account, ComposeDraft, Mailbox, Message, MockMode } from "./types";
+import type { Account, ComposeDraft, ComposeMode, Mailbox, Message, MockMode } from "./types";
 import { ComposePanel } from "./components/ComposePanel";
 import { MessageList } from "./components/MessageList";
 import { MobileInbox } from "./components/MobileInbox";
@@ -70,6 +70,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   const [search, setSearch] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
   const [replyMessageId, setReplyMessageId] = useState<string | null>(null);
+  const [composeMode, setComposeMode] = useState<ComposeMode>("compose");
   const [mode, setMode] = useState<MockMode>("normal");
   const [apiMessages, setApiMessages] = useState<Message[]>([]);
   const [selectedMessageDetail, setSelectedMessageDetail] = useState<Message | undefined>();
@@ -258,7 +259,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         if (!targetId) return;
         event.preventDefault();
         setSelectedMessageId(targetId);
-        openReply(targetId);
+        openReply("reply", targetId);
       }
     }
 
@@ -280,6 +281,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     setSearch("");
     setCheckedIds(new Set());
     setReplyMessageId(null);
+    setComposeMode("compose");
     setComposeOpen(nextState === "compose");
     setSelectedMessageId(firstInboxId);
 
@@ -350,26 +352,44 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
 
   function openCompose() {
     setReplyMessageId(null);
+    setComposeMode("compose");
     setComposeOpen(true);
   }
 
-  function openReply(messageId = selectedMessageId) {
+  function openReply(mode: Exclude<ComposeMode, "compose"> = "reply", messageId = selectedMessageId) {
     if (!messageId) return;
     setReplyMessageId(messageId);
+    setComposeMode(mode);
     setComposeOpen(true);
   }
 
   function closeCompose() {
     setComposeOpen(false);
     setReplyMessageId(null);
+    setComposeMode("compose");
   }
 
   async function sendDraft(draft: ComposeDraft) {
     try {
-      await apiJSON("/api/send", {
-        method: "POST",
-        body: JSON.stringify(draft),
-      });
+      if (draft.attachments?.length) {
+        const formData = new FormData();
+        formData.set("fromAccountId", draft.fromAccountId);
+        formData.set("to", JSON.stringify(draft.to));
+        formData.set("cc", JSON.stringify(draft.cc));
+        formData.set("bcc", JSON.stringify(draft.bcc));
+        formData.set("subject", draft.subject);
+        formData.set("textBody", draft.textBody);
+        draft.attachments.forEach((file) => formData.append("attachments", file, file.name));
+        await apiJSON("/api/send", {
+          method: "POST",
+          body: formData,
+        });
+      } else {
+        await apiJSON("/api/send", {
+          method: "POST",
+          body: JSON.stringify(draft),
+        });
+      }
       setReloadToken((value) => value + 1);
     } catch (error) {
       if (isUnauthorized(error)) onSessionExpired?.();
@@ -551,6 +571,8 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         mode={mode}
         onRetry={retry}
         onCompose={openCompose}
+        onReply={(messageId) => openReply("reply", messageId)}
+        onSearch={handleSearch}
         onSelectMessage={setSelectedMessageId}
         onToggleChecked={toggleChecked}
         onToggleFlagged={toggleFlagged}
@@ -559,7 +581,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         onBulkTrash={() => bulkMoveToKind("trash")}
       />
       <div className="hidden h-screen flex-col md:flex">
-        <Toolbar search={search} searchInputRef={searchInputRef} onSearch={handleSearch} onCompose={openCompose} onRefresh={retry} onSettings={() => window.alert("설정은 아직 준비 중입니다.")} />
+        <Toolbar search={search} searchInputRef={searchInputRef} onSearch={handleSearch} onCompose={openCompose} onRefresh={retry} />
         <div className="min-h-0 flex flex-1">
           <Sidebar
             accounts={accounts}
@@ -595,7 +617,9 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
             mode={mode}
             mailboxes={flatMailboxes}
             onRetry={retry}
-            onReply={() => openReply()}
+            onReply={() => openReply("reply")}
+            onReplyAll={() => openReply("replyAll")}
+            onForward={() => openReply("forward")}
             onToggleFlagged={toggleFlagged}
             onArchive={(message) => moveToKind(message, "archive")}
             onTrash={(message) => moveToKind(message, "trash")}
@@ -604,7 +628,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
           />
         </div>
       </div>
-      {composeOpen ? <ComposePanel accounts={accounts} account={selectedAccount} message={composeMessage} onClose={closeCompose} onSend={useApi ? sendDraft : undefined} /> : null}
+      {composeOpen ? <ComposePanel accounts={accounts} account={selectedAccount} mode={composeMode} message={composeMessage} onClose={closeCompose} onSend={useApi ? sendDraft : undefined} /> : null}
       {import.meta.env.DEV && !composeOpen ? <DevStateSwitcher states={QA_STATES} onApply={applyQaState} /> : null}
     </div>
   );
@@ -641,7 +665,7 @@ class ApiError extends Error {
 
 async function apiJSON<T = unknown>(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
-  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (!(init.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const response = await fetch(path, {
     ...init,
     headers,

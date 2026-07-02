@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -46,6 +47,7 @@ func TestProtectedRoutesRejectMissingSession(t *testing.T) {
 		{http.MethodGet, "/api/accounts", ""},
 		{http.MethodGet, "/api/accounts/jooseho@good-night.co.kr/mailboxes/inbox/messages", ""},
 		{http.MethodGet, "/api/messages/inbox.1", ""},
+		{http.MethodGet, "/api/messages/inbox.1/attachments/att_0", ""},
 		{http.MethodPatch, "/api/messages/inbox.1/flagged", `{"flagged":true}`},
 		{http.MethodPatch, "/api/messages/inbox.1/seen", `{"seen":false}`},
 		{http.MethodPost, "/api/messages/inbox.1/move", `{"mailboxId":"mbox_QXJjaGl2ZQ"}`},
@@ -209,11 +211,53 @@ func TestSessionUsesStoredCredentialForMailboxAndMessageRoutes(t *testing.T) {
 	if strings.Join(messageBody.Message.TextBody, "\n") != "Hello from IMAP." {
 		t.Fatalf("textBody = %#v", messageBody.Message.TextBody)
 	}
-	if len(messageBody.Message.Attachments) != 1 || messageBody.Message.Attachments[0].Name != "roadmap.pdf" {
+	if len(messageBody.Message.Attachments) != 1 || messageBody.Message.Attachments[0].ID != "att_0" || messageBody.Message.Attachments[0].Name != "roadmap.pdf" {
 		t.Fatalf("attachments = %#v", messageBody.Message.Attachments)
 	}
 	if loginCount < 3 {
 		t.Fatalf("login count = %d, want each authenticated route to open IMAP", loginCount)
+	}
+}
+
+func TestMessageAttachmentRouteDownloadsDecodedAttachment(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Attachment",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: multipart/mixed; boundary=abc",
+		"",
+		"--abc",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		"Hello.",
+		"",
+		"--abc",
+		"Content-Type: text/plain; name=\"notes.txt\"",
+		"Content-Disposition: attachment; filename=\"notes.txt\"",
+		"Content-Transfer-Encoding: base64",
+		"",
+		"Tm90ZSBib2R5",
+		"--abc--",
+		"",
+	}, "\r\n")
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin:  func(username, password string) string { return "OK LOGIN completed" },
+		messages: map[string]map[string]string{"INBOX": {"7": rawMessage}},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+	messageID := messageID("inbox", "7")
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/messages/"+messageID+"/attachments/att_0", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if recorder.Body.String() != "Note body" {
+		t.Fatalf("attachment body = %q, want decoded body", recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Header().Get("Content-Disposition"), "notes.txt") {
+		t.Fatalf("content disposition = %q, want filename", recorder.Header().Get("Content-Disposition"))
 	}
 }
 
@@ -716,6 +760,60 @@ func TestSendUsesStoredCredentialForSMTP(t *testing.T) {
 	}
 	if appendedMailbox != "Sent" {
 		t.Fatalf("appended mailbox = %q, want Sent", appendedMailbox)
+	}
+	if normalizeMailLineEndings(appendedMessage) != normalizeMailLineEndings(smtpData) {
+		t.Fatalf("appended message = %q, want SMTP data %q", appendedMessage, smtpData)
+	}
+}
+
+func TestSendAcceptsMultipartAttachments(t *testing.T) {
+	var appendedMessage string
+	imapHost, imapPort := startFakeIMAPServer(t, fakeIMAPScript{
+		mailboxes: []string{"INBOX", "Sent"},
+		onLogin:   func(username, password string) string { return "OK LOGIN completed" },
+		onAppend: func(mailbox string, message string) string {
+			appendedMessage = message
+			return "OK APPEND completed"
+		},
+	})
+	var smtpAuthLine string
+	var smtpData string
+	smtpHost, smtpPort := startFakeSMTPServer(t, &smtpAuthLine, &smtpData)
+	config := testConfig(t, imapHost, imapPort)
+	config.SMTPHost = smtpHost
+	config.SMTPPort = smtpPort
+	config.SMTPUserFormat = "localpart"
+	server, cookie := loginTestSessionWithPassword(t, config, "mail-password")
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("to", `["alice@example.com"]`)
+	_ = writer.WriteField("subject", "With attachment")
+	_ = writer.WriteField("textBody", "See attached.")
+	part, err := writer.CreateFormFile("attachments", "notes.txt")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	_, _ = part.Write([]byte("Hello attachment"))
+	_ = writer.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/send", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.AddCookie(cookie)
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	for _, want := range []string{
+		"Content-Type: multipart/mixed",
+		"Content-Disposition: attachment; filename=notes.txt",
+		"Content-Transfer-Encoding: base64",
+		"SGVsbG8gYXR0YWNobWVudA==",
+	} {
+		if !strings.Contains(smtpData, want) {
+			t.Fatalf("smtp data missing %q: %s", want, smtpData)
+		}
 	}
 	if normalizeMailLineEndings(appendedMessage) != normalizeMailLineEndings(smtpData) {
 		t.Fatalf("appended message = %q, want SMTP data %q", appendedMessage, smtpData)

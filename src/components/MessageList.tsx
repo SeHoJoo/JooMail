@@ -79,7 +79,7 @@ export function MessageList({ title, unreadCount, messages, mailboxes, selectedI
         <div className="flex h-11 items-center border-b border-line px-4">
           <input className="h-[15px] w-[15px] accent-accent" checked={allVisibleChecked} disabled={!messages.length} onChange={onToggleAllChecked} type="checkbox" aria-label={allVisibleChecked ? "전체 선택 해제" : "전체 선택"} />
           <div className="ml-3 truncate text-[13.5px] font-bold text-ink">{search ? `'${search}' 결과 ${messages.length}건` : title}</div>
-          <div className="ml-auto text-[11.5px] text-muted">{search ? "현재 계정 전체" : `안읽음 ${unreadCount}`}</div>
+          <div className="ml-auto text-[11.5px] text-muted">{search ? "현재 메일함" : `안읽음 ${unreadCount}`}</div>
           <button className="ml-4 text-muted" aria-label="메일 목록 새로고침" onClick={onRetry} type="button">
             <Icon name="refresh" className="h-[15px] w-[15px]" />
           </button>
@@ -87,7 +87,7 @@ export function MessageList({ title, unreadCount, messages, mailboxes, selectedI
       )}
       {search ? (
         <div className="border-b border-line px-4 py-2 text-[11.5px] text-muted">
-          검색 범위: 현재 계정 전체
+          검색 범위: 현재 메일함
         </div>
       ) : null}
       <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">

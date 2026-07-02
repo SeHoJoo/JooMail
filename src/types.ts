@@ -27,9 +27,18 @@ export type Account = {
 };
 
 export type Attachment = {
+  id?: string;
   name: string;
   size: string;
   type: "pdf" | "image" | "file";
+};
+
+export type MessageHeaders = {
+  from?: string;
+  to?: string[];
+  cc?: string[];
+  date?: string;
+  subject?: string;
 };
 
 export type Message = {
@@ -53,7 +62,10 @@ export type Message = {
   bullets?: string[];
   link?: string;
   attachments?: Attachment[];
+  headers?: MessageHeaders;
 };
+
+export type ComposeMode = "compose" | "reply" | "replyAll" | "forward";
 
 export type ComposeDraft = {
   fromAccountId: string;
@@ -62,6 +74,7 @@ export type ComposeDraft = {
   bcc: string[];
   subject: string;
   textBody: string;
+  attachments?: File[];
 };
 
 export type MockMode = "normal" | "loading" | "error";

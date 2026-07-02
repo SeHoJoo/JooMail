@@ -14,6 +14,8 @@ type MobileInboxProps = {
   mode: MockMode;
   onRetry: () => void;
   onCompose: () => void;
+  onReply: (messageId: string) => void;
+  onSearch: (value: string) => void;
   onSelectMessage: (id: string) => void;
   onToggleChecked: (id: string) => void;
   onToggleFlagged: (message: Message) => void;
@@ -22,8 +24,9 @@ type MobileInboxProps = {
   onBulkTrash: () => Promise<void> | void;
 };
 
-export function MobileInbox({ account, messages, selectedMessage, selectedId, checkedIds, search, mode, onRetry, onCompose, onSelectMessage, onToggleChecked, onToggleFlagged, onClearChecked, onBulkArchive, onBulkTrash }: MobileInboxProps) {
+export function MobileInbox({ account, messages, selectedMessage, selectedId, checkedIds, search, mode, onRetry, onCompose, onReply, onSearch, onSelectMessage, onToggleChecked, onToggleFlagged, onClearChecked, onBulkArchive, onBulkTrash }: MobileInboxProps) {
   const [readingId, setReadingId] = useState("");
+  const [searchOpen, setSearchOpen] = useState(Boolean(search));
   const title = search ? "검색 결과" : "받은편지함";
   const checkedCount = checkedIds.size;
   const selecting = checkedCount > 0;
@@ -39,7 +42,7 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, ch
   }, [messages, readingId]);
 
   if (readingMessage) {
-    return <MobileReadingPane message={readingMessage} onBack={() => setReadingId("")} onCompose={onCompose} onToggleFlagged={onToggleFlagged} />;
+    return <MobileReadingPane message={readingMessage} onBack={() => setReadingId("")} onReply={onReply} onToggleFlagged={onToggleFlagged} />;
   }
 
   return (
@@ -58,9 +61,22 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, ch
       <div className="flex items-center px-6 pt-6">
         <h1 className="text-2xl font-bold text-ink">{title}</h1>
         {count > 0 || search ? <span className="ml-2 text-[15px] font-medium text-accent">{count}</span> : null}
-        <Icon name="search" className="ml-auto h-[18px] w-[18px] text-ink" />
+        <button className="ml-auto flex h-9 w-9 items-center justify-center rounded-lg text-ink hover:bg-[#f6f7f8]" aria-label="메일 검색" onClick={() => setSearchOpen((open) => !open)} type="button">
+          <Icon name="search" className="h-[18px] w-[18px]" />
+        </button>
       </div>
-      {search ? <div className="px-6 pt-2 text-[12.5px] text-muted">"{search}"에 대한 결과 {messages.length}건 · 현재 계정 전체</div> : null}
+      {searchOpen ? (
+        <div className="px-6 pt-3">
+          <input
+            className="h-10 w-full rounded-lg bg-[#f2f3f5] px-3 text-[13px] text-ink outline-none placeholder:text-muted"
+            value={search}
+            onChange={(event) => onSearch(event.target.value)}
+            placeholder="메일 검색"
+            aria-label="메일 검색"
+          />
+        </div>
+      ) : null}
+      {search ? <div className="px-6 pt-2 text-[12.5px] text-muted">"{search}"에 대한 결과 {messages.length}건 · 현재 메일함</div> : null}
       {checkedCount > 0 ? (
         <div className="mt-5 flex h-11 items-center border-y border-line bg-selected px-6 text-accent">
           <input className="h-[15px] w-[15px] accent-accent" aria-label="선택 해제" checked onChange={onClearChecked} type="checkbox" />
@@ -140,7 +156,7 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, ch
   );
 }
 
-function MobileReadingPane({ message, onBack, onCompose, onToggleFlagged }: { message: Message; onBack: () => void; onCompose: () => void; onToggleFlagged: (message: Message) => void }) {
+function MobileReadingPane({ message, onBack, onReply, onToggleFlagged }: { message: Message; onBack: () => void; onReply: (messageId: string) => void; onToggleFlagged: (message: Message) => void }) {
   return (
     <main className="min-h-screen bg-white pb-24 md:hidden">
       <div className="flex h-12 items-center px-6 pt-2 text-sm font-bold text-ink">
@@ -155,7 +171,7 @@ function MobileReadingPane({ message, onBack, onCompose, onToggleFlagged }: { me
         <button className="ml-2 flex h-9 w-9 items-center justify-center rounded-lg text-ink hover:bg-[#f6f7f8]" aria-label={message.flagged ? "중요 표시 해제" : "중요 표시"} onClick={() => onToggleFlagged(message)} type="button">
           <Icon name="star" className={message.flagged ? "h-4 w-4 fill-[#f5b514] text-[#f5b514]" : "h-4 w-4 text-muted"} />
         </button>
-        <button className="ml-2 flex h-9 w-9 items-center justify-center rounded-lg text-ink hover:bg-[#f6f7f8]" aria-label="답장 작성" onClick={onCompose} type="button">
+        <button className="ml-2 flex h-9 w-9 items-center justify-center rounded-lg text-ink hover:bg-[#f6f7f8]" aria-label="답장 작성" onClick={() => onReply(message.id)} type="button">
           <Icon name="compose" className="h-4 w-4" />
         </button>
       </div>
@@ -179,11 +195,11 @@ function MobileReadingPane({ message, onBack, onCompose, onToggleFlagged }: { me
         {message.attachments?.length ? (
           <div className="mt-6 space-y-2">
             {message.attachments.map((attachment) => (
-              <div key={`${attachment.name}-${attachment.size}`} className="flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-[12.5px] text-text">
+              <a key={`${attachment.id ?? attachment.name}-${attachment.size}`} className="flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-[12.5px] text-text" href={attachment.id ? `/api/messages/${encodeURIComponent(message.id)}/attachments/${encodeURIComponent(attachment.id)}` : undefined} download={attachment.name}>
                 <Icon name="paperclip" className="h-4 w-4 shrink-0 text-muted" />
                 <span className="min-w-0 flex-1 truncate">{attachment.name}</span>
                 <span className="shrink-0 text-muted">{attachment.size}</span>
-              </div>
+              </a>
             ))}
           </div>
         ) : null}

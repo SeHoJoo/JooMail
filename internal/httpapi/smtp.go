@@ -1,13 +1,18 @@
 package httpapi
 
 import (
+	"bytes"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"mime"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/smtp"
+	"net/textproto"
 	"strings"
 	"time"
 )
@@ -19,11 +24,18 @@ var newSMTPTLSConfig = func(host string) *tls.Config {
 }
 
 type sendRequest struct {
-	To       []string `json:"to"`
-	Cc       []string `json:"cc"`
-	Bcc      []string `json:"bcc"`
-	Subject  string   `json:"subject"`
-	TextBody string   `json:"textBody"`
+	To          []string             `json:"to"`
+	Cc          []string             `json:"cc"`
+	Bcc         []string             `json:"bcc"`
+	Subject     string               `json:"subject"`
+	TextBody    string               `json:"textBody"`
+	Attachments []outgoingAttachment `json:"-"`
+}
+
+type outgoingAttachment struct {
+	Filename    string
+	ContentType string
+	Data        []byte
 }
 
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
@@ -32,7 +44,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request sendRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := parseSendRequest(r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid send request")
 		return
 	}
@@ -45,6 +57,75 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+}
+
+func parseSendRequest(r *http.Request, request *sendRequest) error {
+	contentType := r.Header.Get("Content-Type")
+	mediaType, _, _ := mime.ParseMediaType(contentType)
+	if strings.EqualFold(mediaType, "multipart/form-data") {
+		return parseMultipartSendRequest(r, request)
+	}
+	return json.NewDecoder(r.Body).Decode(request)
+}
+
+func parseMultipartSendRequest(r *http.Request, request *sendRequest) error {
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		return err
+	}
+	request.To = formRecipientList(r, "to")
+	request.Cc = formRecipientList(r, "cc")
+	request.Bcc = formRecipientList(r, "bcc")
+	request.Subject = r.FormValue("subject")
+	request.TextBody = r.FormValue("textBody")
+	if r.MultipartForm == nil {
+		return nil
+	}
+	for _, fileHeader := range r.MultipartForm.File["attachments"] {
+		file, err := fileHeader.Open()
+		if err != nil {
+			return err
+		}
+		data, readErr := io.ReadAll(file)
+		_ = file.Close()
+		if readErr != nil {
+			return readErr
+		}
+		contentType := fileHeader.Header.Get("Content-Type")
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		request.Attachments = append(request.Attachments, outgoingAttachment{
+			Filename:    fileHeader.Filename,
+			ContentType: contentType,
+			Data:        data,
+		})
+	}
+	return nil
+}
+
+func formRecipientList(r *http.Request, key string) []string {
+	value := strings.TrimSpace(r.FormValue(key))
+	if value == "" {
+		return nil
+	}
+	var out []string
+	if json.Unmarshal([]byte(value), &out) == nil {
+		return compactRecipients(out)
+	}
+	return compactRecipients(strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n'
+	}))
+}
+
+func compactRecipients(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func (s *Server) sendMail(credential storedCredential, request sendRequest) error {
@@ -144,8 +225,54 @@ func formatOutgoingMessage(from string, request sendRequest) string {
 	headers = append(headers,
 		"Subject: "+mime.QEncoding.Encode("UTF-8", strings.ReplaceAll(request.Subject, "\r\n", " ")),
 		"MIME-Version: 1.0",
+	)
+	if len(request.Attachments) > 0 {
+		return formatMultipartOutgoingMessage(headers, request)
+	}
+	headers = append(headers,
 		"Content-Type: text/plain; charset=UTF-8",
 		"Content-Transfer-Encoding: 8bit",
 	)
 	return strings.Join(headers, "\r\n") + "\r\n\r\n" + request.TextBody + "\r\n"
+}
+
+func formatMultipartOutgoingMessage(headers []string, request sendRequest) string {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	headers = append(headers, `Content-Type: multipart/mixed; boundary="`+writer.Boundary()+`"`)
+	textHeader := textproto.MIMEHeader{}
+	textHeader.Set("Content-Type", "text/plain; charset=UTF-8")
+	textHeader.Set("Content-Transfer-Encoding", "8bit")
+	textPart, _ := writer.CreatePart(textHeader)
+	_, _ = textPart.Write([]byte(request.TextBody + "\r\n"))
+	for _, attachment := range request.Attachments {
+		partHeader := textproto.MIMEHeader{}
+		contentType := attachment.ContentType
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		partHeader.Set("Content-Type", mime.FormatMediaType(contentType, map[string]string{"name": attachment.Filename}))
+		partHeader.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": attachment.Filename}))
+		partHeader.Set("Content-Transfer-Encoding", "base64")
+		part, _ := writer.CreatePart(partHeader)
+		_, _ = part.Write([]byte(wrapBase64(attachment.Data)))
+	}
+	_ = writer.Close()
+	return strings.Join(headers, "\r\n") + "\r\n\r\n" + body.String()
+}
+
+func wrapBase64(data []byte) string {
+	encoded := base64.StdEncoding.EncodeToString(data)
+	if encoded == "" {
+		return "\r\n"
+	}
+	var builder strings.Builder
+	for len(encoded) > 76 {
+		builder.WriteString(encoded[:76])
+		builder.WriteString("\r\n")
+		encoded = encoded[76:]
+	}
+	builder.WriteString(encoded)
+	builder.WriteString("\r\n")
+	return builder.String()
 }

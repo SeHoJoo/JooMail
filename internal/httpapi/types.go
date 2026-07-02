@@ -19,6 +19,7 @@ type Account struct {
 }
 
 type Attachment struct {
+	ID   string `json:"id,omitempty"`
 	Name string `json:"name"`
 	Size string `json:"size"`
 	Type string `json:"type"`

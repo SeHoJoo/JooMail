@@ -108,7 +108,7 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
         </div>
 
         {!authError ? (
-          <div className="mt-[14px] flex items-center justify-between gap-3">
+          <div className="mt-[14px] flex items-center gap-3">
             <label className="flex items-center gap-2 text-[12.5px] font-medium text-[#3a3f45]">
               <button
                 className={[
@@ -124,9 +124,6 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
               </button>
               로그인 상태 유지
             </label>
-            <button className="text-[12.5px] font-medium text-accent" onClick={() => window.alert("비밀번호 찾기는 아직 준비 중입니다.")} type="button">
-              비밀번호 찾기
-            </button>
           </div>
         ) : null}
 
@@ -137,14 +134,6 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
             disabled={submitting}
           >
             로그인
-          </button>
-          <button
-            className="mt-[18px] flex items-center justify-center gap-1 border-t border-[#eef0f2] pt-[17px] text-[12.5px] font-medium text-[#6b727a]"
-            onClick={() => window.alert("서버 직접 설정은 아직 준비 중입니다.")}
-            type="button"
-          >
-            <Icon name="chevron" className="h-4 w-4 -rotate-90" />
-            서버 직접 설정 (IMAP / SMTP)
           </button>
         </div>
       </form>
