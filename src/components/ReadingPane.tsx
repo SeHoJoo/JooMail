@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { Message, MockMode } from "../types";
 import { EmptyState, ErrorState, LoadingState } from "./StateViews";
 import { Icon } from "./Icon";
@@ -10,6 +11,16 @@ type ReadingPaneProps = {
 };
 
 export function ReadingPane({ message, mode, onRetry, onReply }: ReadingPaneProps) {
+  const [recipientsOpen, setRecipientsOpen] = useState(false);
+  const [quotedOpen, setQuotedOpen] = useState(false);
+  const [showRemoteImages, setShowRemoteImages] = useState(false);
+
+  useEffect(() => {
+    setRecipientsOpen(false);
+    setQuotedOpen(false);
+    setShowRemoteImages(false);
+  }, [message?.id]);
+
   if (mode === "loading") return <section className="hidden min-w-0 flex-1 bg-white md:block"><LoadingState /></section>;
   if (mode === "error") return <section className="hidden min-w-0 flex-1 bg-white md:block"><ErrorState onRetry={onRetry} /></section>;
   if (!message) {
@@ -34,7 +45,19 @@ export function ReadingPane({ message, mode, onRetry, onReply }: ReadingPaneProp
               <span className="text-sm font-bold text-ink">{message.sender}</span>
               <span className="truncate text-[13px] text-muted">&lt;{message.senderEmail}&gt;</span>
             </div>
-            <div className="mt-1 text-xs text-muted">받는사람: 나 (jooseho@gmail.com) · 받는사람 보기 ▾</div>
+            <div className="mt-1 text-xs text-muted">
+              받는사람: 나 (jooseho@gmail.com) ·{" "}
+              <button className="font-medium text-accent" onClick={() => setRecipientsOpen((open) => !open)} type="button">
+                받는사람 {recipientsOpen ? "접기" : "보기"} {recipientsOpen ? "▴" : "▾"}
+              </button>
+            </div>
+            {recipientsOpen ? (
+              <div className="mt-2 rounded-lg border border-line bg-[#f7f8f9] px-3 py-2 text-xs leading-5 text-text">
+                <div>받는사람: 나 &lt;jooseho@gmail.com&gt;</div>
+                <div>보낸사람: {message.sender} &lt;{message.senderEmail}&gt;</div>
+                <div>날짜: {message.fullDate}</div>
+              </div>
+            ) : null}
           </div>
           <div className="hidden w-[200px] text-right text-xs text-muted lg:block">
             <div>{message.fullDate}</div>
@@ -55,11 +78,19 @@ export function ReadingPane({ message, mode, onRetry, onReply }: ReadingPaneProp
       </div>
       <div className="border-t border-line" />
       <div className="px-[27px] py-[18px]">
-        {message.remoteImagesBlocked ? (
+        {message.remoteImagesBlocked && !showRemoteImages ? (
           <div className="mb-5 flex h-9 items-center rounded-lg bg-[#f7f8f9] px-3 text-[12.5px] text-text">
             <Icon name="image" className="mr-3 h-4 w-4 text-muted" />
             이 메일의 원격 이미지가 차단되었습니다.
-            <button className="ml-auto font-medium text-accent">이미지 표시</button>
+            <button className="ml-auto font-medium text-accent" onClick={() => setShowRemoteImages(true)} type="button">
+              이미지 표시
+            </button>
+          </div>
+        ) : null}
+        {message.remoteImagesBlocked && showRemoteImages ? (
+          <div className="mb-5 flex h-9 items-center rounded-lg bg-selected px-3 text-[12.5px] text-accent">
+            <Icon name="image" className="mr-3 h-4 w-4" />
+            원격 이미지 표시됨
           </div>
         ) : null}
         <article className="max-w-[750px] whitespace-pre-line text-sm leading-[1.5] text-text">
@@ -105,10 +136,16 @@ export function ReadingPane({ message, mode, onRetry, onReply }: ReadingPaneProp
             </div>
           </div>
         ) : null}
-        <button className="mt-5 flex items-center gap-2 rounded-md bg-[#f7f8f9] px-3 py-1.5 text-xs text-muted">
+        <button className="mt-5 flex items-center gap-2 rounded-md bg-[#f7f8f9] px-3 py-1.5 text-xs text-muted hover:text-text" onClick={() => setQuotedOpen((open) => !open)} type="button">
           <Icon name="more" className="h-3.5 w-3.5" />
-          인용된 이전 대화 보기
+          인용된 이전 대화 {quotedOpen ? "접기" : "보기"}
         </button>
+        {quotedOpen ? (
+          <div className="mt-3 max-w-[750px] rounded-lg border border-line bg-[#f7f8f9] px-4 py-3 text-[12.5px] leading-5 text-muted">
+            <p className="mb-2">On 2026년 7월 1일, {message.sender} wrote:</p>
+            <p>이전 대화 내용은 기본 접힘 상태로 유지됩니다. 이 영역은 목업 UI에서만 펼쳐집니다.</p>
+          </div>
+        ) : null}
       </div>
     </section>
   );
