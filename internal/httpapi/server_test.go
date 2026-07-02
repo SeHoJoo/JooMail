@@ -23,6 +23,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/text/encoding/japanese"
+	"golang.org/x/text/transform"
 )
 
 func TestHealth(t *testing.T) {
@@ -292,6 +295,9 @@ func TestMessageAttachmentRouteDownloadsDecodedAttachment(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Header().Get("Content-Disposition"), "notes.txt") {
 		t.Fatalf("content disposition = %q, want filename", recorder.Header().Get("Content-Disposition"))
+	}
+	if recorder.Header().Get("Content-Type") != "text/plain" {
+		t.Fatalf("content type = %q, want text/plain", recorder.Header().Get("Content-Type"))
 	}
 }
 
@@ -900,6 +906,188 @@ func TestParseRawMessageMultipartAlternativeSanitizesHTML(t *testing.T) {
 	}
 	if !message.RemoteImagesBlocked {
 		t.Fatal("remoteImagesBlocked = false, want true for remote image HTML")
+	}
+}
+
+func TestParseRawMessageMultipartAlternativeFallsBackToTextOnly(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Text alternative",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: multipart/alternative; boundary=alt",
+		"",
+		"--alt",
+		"Content-Type: text/plain; charset=utf-8",
+		"Content-Transfer-Encoding: quoted-printable",
+		"",
+		"Plain=20fallback.",
+		"--alt--",
+		"",
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if strings.Join(message.TextBody, "\n") != "Plain fallback." {
+		t.Fatalf("textBody = %#v, want plain fallback", message.TextBody)
+	}
+	if message.HTMLBody != "" {
+		t.Fatalf("htmlBody = %q, want no HTML fallback", message.HTMLBody)
+	}
+}
+
+func TestParseRawMessageMultipartRelatedMapsCIDImages(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Inline image",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: multipart/related; boundary=rel",
+		"",
+		"--rel",
+		"Content-Type: text/html; charset=utf-8",
+		"",
+		`<p>Logo <img src="cid:logo.123@example" onload="alert(1)"></p>`,
+		"",
+		"--rel",
+		"Content-Type: image/png; name=\"logo.png\"",
+		"Content-ID: <logo.123@example>",
+		"Content-Disposition: inline; filename=\"logo.png\"",
+		"Content-Transfer-Encoding: base64",
+		"",
+		"iVBORw0KGgo=",
+		"--rel--",
+		"",
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if !strings.Contains(message.HTMLBody, `src="data:image/png;base64,iVBORw0KGgo="`) {
+		t.Fatalf("htmlBody = %q, want cid image mapped to data URL", message.HTMLBody)
+	}
+	if strings.Contains(strings.ToLower(message.HTMLBody), "onload") || strings.Contains(message.HTMLBody, "cid:") {
+		t.Fatalf("htmlBody = %q, want sanitized resolved image", message.HTMLBody)
+	}
+	if message.RemoteImagesBlocked {
+		t.Fatal("remoteImagesBlocked = true, want cid image not treated as remote image")
+	}
+	if len(message.Attachments) != 0 {
+		t.Fatalf("attachments = %#v, want inline cid image excluded from attachment list", message.Attachments)
+	}
+}
+
+func TestParseRawMessageTransferEncodings(t *testing.T) {
+	tests := []struct {
+		name     string
+		encoding string
+		body     string
+		want     string
+	}{
+		{name: "base64", encoding: "base64", body: "QmFzZTY0IGJvZHku", want: "Base64 body."},
+		{name: "quoted-printable", encoding: "quoted-printable", body: "Quoted=20printable=20body.", want: "Quoted printable body."},
+		{name: "7bit", encoding: "7bit", body: "Seven bit body.", want: "Seven bit body."},
+		{name: "8bit", encoding: "8bit", body: "Cafe \xc3\xa9 body.", want: "Cafe é body."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rawMessage := strings.Join([]string{
+				"From: Alice <alice@example.com>",
+				"To: Jooseho <jooseho@good-night.co.kr>",
+				"Subject: Transfer",
+				"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+				"Content-Type: text/plain; charset=utf-8",
+				"Content-Transfer-Encoding: " + tt.encoding,
+				"",
+				tt.body,
+			}, "\r\n")
+
+			message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+			if err != nil {
+				t.Fatalf("parse raw message: %v", err)
+			}
+			if strings.Join(message.TextBody, "\n") != tt.want {
+				t.Fatalf("textBody = %#v, want %q", message.TextBody, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseRawMessageDecodesISO2022JPCharset(t *testing.T) {
+	body, err := io.ReadAll(transform.NewReader(strings.NewReader("日本語本文"), japanese.ISO2022JP.NewEncoder()))
+	if err != nil {
+		t.Fatalf("encode fixture: %v", err)
+	}
+	raw := bytes.NewBuffer(nil)
+	raw.WriteString(strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: =?ISO-2022-JP?B?GyRCRnxLXDhsGyhC?=",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: text/plain; charset=ISO-2022-JP",
+		"",
+	}, "\r\n"))
+	raw.WriteString("\r\n")
+	raw.Write(body)
+
+	message, err := parseRawMessage("account", "inbox", "8", raw.Bytes())
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if message.Subject != "日本語" {
+		t.Fatalf("subject = %q, want decoded ISO-2022-JP", message.Subject)
+	}
+	if strings.Join(message.TextBody, "\n") != "日本語本文" {
+		t.Fatalf("textBody = %#v, want decoded ISO-2022-JP", message.TextBody)
+	}
+}
+
+func TestParseRawMessageUnsupportedCharsetKeepsVisibleFallback(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Unsupported charset",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: text/plain; charset=x-unknown-mailer",
+		"",
+		"Visible fallback body.",
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if strings.Join(message.TextBody, "\n") != "Visible fallback body." {
+		t.Fatalf("textBody = %#v, want raw visible fallback", message.TextBody)
+	}
+}
+
+func TestParseRawMessageMalformedMultipartKeepsUsableHeaders(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Broken Sender <broken@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Broken multipart",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: multipart/mixed",
+		"",
+		"This body cannot be parsed as multipart.",
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if message.Subject != "Broken multipart" || message.SenderEmail != "broken@example.com" || message.Headers.Date == "" {
+		t.Fatalf("message headers = %#v", message)
 	}
 }
 

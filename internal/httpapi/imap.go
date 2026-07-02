@@ -12,6 +12,7 @@ import (
 	"mime/multipart"
 	"mime/quotedprintable"
 	"net/mail"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -27,6 +28,13 @@ import (
 const imapCommandTimeout = 10 * time.Second
 
 var remoteImageSrcPattern = regexp.MustCompile(`(?i)(<img\b[^>]*?)\s+src\s*=\s*("https?://[^"]*"|'https?://[^']*'|https?://[^\s>]+)`)
+var cidImageSrcPattern = regexp.MustCompile(`(?i)(<img\b[^>]*?)\s+src\s*=\s*("cid:[^"]+"|'cid:[^']+'|cid:[^\s>]+)`)
+var dataImageSrcPattern = regexp.MustCompile(`(?i)^data:image/(gif|jpeg|png|webp);base64,[a-z0-9+/]+=*$`)
+
+type inlineImage struct {
+	mediaType string
+	data      []byte
+}
 
 type deadlineReadWriteCloser interface {
 	io.ReadWriteCloser
@@ -945,6 +953,9 @@ func parseMessageBodyWithCounter(header mail.Header, body io.Reader, counter *in
 	contentType := header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err == nil && strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
+		if strings.EqualFold(mediaType, "multipart/related") {
+			return parseRelatedMessageBody(body, params["boundary"], counter)
+		}
 		reader := multipart.NewReader(body, params["boundary"])
 		var text []string
 		var html []string
@@ -977,6 +988,86 @@ func parseMessageBodyWithCounter(header mail.Header, body io.Reader, counter *in
 	return splitParagraphs(string(decoded)), "", nil, false
 }
 
+func parseRelatedMessageBody(body io.Reader, boundary string, counter *int) ([]string, string, []Attachment, bool) {
+	reader := multipart.NewReader(body, boundary)
+	var text []string
+	var htmlParts []string
+	var attachments []Attachment
+	inlineImages := map[string]inlineImage{}
+	for {
+		part, err := reader.NextPart()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			break
+		}
+		partText, partHTML, partAttachments := parseRelatedPart(mail.Header(part.Header), part, counter, inlineImages)
+		text = append(text, partText...)
+		if partHTML != "" {
+			htmlParts = append(htmlParts, partHTML)
+		}
+		attachments = append(attachments, partAttachments...)
+	}
+	htmlBody := resolveCIDImageSources(strings.Join(htmlParts, "\n"), inlineImages)
+	htmlBody, remoteImagesBlocked := sanitizeMailHTML(htmlBody)
+	return text, htmlBody, attachments, remoteImagesBlocked
+}
+
+func parseRelatedPart(header mail.Header, body io.Reader, counter *int, inlineImages map[string]inlineImage) ([]string, string, []Attachment) {
+	contentType := header.Get("Content-Type")
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err == nil && strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
+		reader := multipart.NewReader(body, params["boundary"])
+		var text []string
+		var html []string
+		var attachments []Attachment
+		for {
+			part, err := reader.NextPart()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				break
+			}
+			partText, partHTML, partAttachments := parseRelatedPart(mail.Header(part.Header), part, counter, inlineImages)
+			text = append(text, partText...)
+			if partHTML != "" {
+				html = append(html, partHTML)
+			}
+			attachments = append(attachments, partAttachments...)
+		}
+		return text, strings.Join(html, "\n"), attachments
+	}
+	disposition, dispositionParams, _ := mime.ParseMediaType(header.Get("Content-Disposition"))
+	filename := dispositionParams["filename"]
+	if filename == "" {
+		filename = params["name"]
+	}
+	decoded := decodePartBody(header, body)
+	if isInlineCIDImage(header, mediaType, disposition) {
+		inlineImages[normalizeContentID(header.Get("Content-ID"))] = inlineImage{mediaType: mediaType, data: decoded}
+		return nil, "", nil
+	}
+	if strings.EqualFold(disposition, "attachment") || filename != "" {
+		id := fmt.Sprintf("att_%d", *counter)
+		*counter++
+		return nil, "", []Attachment{{
+			ID:   id,
+			Name: decodeHeader(filename),
+			Size: formatBytes(len(decoded)),
+			Type: attachmentType(mediaType),
+		}}
+	}
+	if strings.EqualFold(mediaType, "text/plain") || mediaType == "" {
+		return splitParagraphs(string(decoded)), "", nil
+	}
+	if strings.EqualFold(mediaType, "text/html") {
+		return nil, string(decoded), nil
+	}
+	return nil, "", nil
+}
+
 func parsePart(header mail.Header, body io.Reader, counter *int) ([]string, string, []Attachment, bool) {
 	contentType := header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
@@ -989,6 +1080,9 @@ func parsePart(header mail.Header, body io.Reader, counter *int) ([]string, stri
 		filename = params["name"]
 	}
 	decoded := decodePartBody(header, body)
+	if isInlineCIDImage(header, mediaType, disposition) {
+		return nil, "", nil, false
+	}
 	if strings.EqualFold(disposition, "attachment") || filename != "" {
 		id := fmt.Sprintf("att_%d", *counter)
 		*counter++
@@ -1047,6 +1141,10 @@ func findAttachmentPayload(header mail.Header, body io.Reader, attachmentID stri
 		filename = params["name"]
 	}
 	if !strings.EqualFold(disposition, "attachment") && filename == "" {
+		_, _ = io.Copy(io.Discard, body)
+		return AttachmentPayload{}, ErrNotFound
+	}
+	if isInlineCIDImage(header, mediaType, disposition) {
 		_, _ = io.Copy(io.Discard, body)
 		return AttachmentPayload{}, ErrNotFound
 	}
@@ -1116,6 +1214,8 @@ func sanitizeMailHTML(value string) (string, bool) {
 	policy.AllowElements("a", "b", "blockquote", "br", "code", "div", "em", "hr", "i", "img", "li", "ol", "p", "pre", "span", "strong", "table", "tbody", "td", "th", "thead", "tr", "u", "ul")
 	policy.AllowAttrs("href").OnElements("a")
 	policy.AllowAttrs("alt", "data-joomail-remote-src", "height", "width").OnElements("img")
+	policy.AllowAttrs("src").Matching(dataImageSrcPattern).OnElements("img")
+	policy.AllowDataURIImages()
 	return policy.Sanitize(value), remoteImagesBlocked
 }
 
@@ -1132,6 +1232,44 @@ func blockRemoteImageSources(value string) string {
 		url := strings.Trim(parts[2], `"'`)
 		return parts[1] + ` data-joomail-remote-src="` + html.EscapeString(url) + `"`
 	})
+}
+
+func resolveCIDImageSources(value string, images map[string]inlineImage) string {
+	if len(images) == 0 || value == "" {
+		return value
+	}
+	return cidImageSrcPattern.ReplaceAllStringFunc(value, func(match string) string {
+		parts := cidImageSrcPattern.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+		cid := normalizeContentID(strings.Trim(parts[2], `"'`))
+		image, ok := images[cid]
+		if !ok || !strings.HasPrefix(strings.ToLower(image.mediaType), "image/") {
+			return match
+		}
+		src := "data:" + image.mediaType + ";base64," + base64.StdEncoding.EncodeToString(image.data)
+		return parts[1] + ` src="` + html.EscapeString(src) + `"`
+	})
+}
+
+func isInlineCIDImage(header mail.Header, mediaType string, disposition string) bool {
+	if header.Get("Content-ID") == "" || !strings.HasPrefix(strings.ToLower(mediaType), "image/") {
+		return false
+	}
+	return disposition == "" || strings.EqualFold(disposition, "inline")
+}
+
+func normalizeContentID(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) >= 4 && strings.EqualFold(value[:4], "cid:") {
+		value = value[4:]
+	}
+	value = strings.Trim(value, "<>")
+	if unescaped, err := url.PathUnescape(value); err == nil {
+		value = unescaped
+	}
+	return strings.ToLower(value)
 }
 
 func splitParagraphs(text string) []string {
