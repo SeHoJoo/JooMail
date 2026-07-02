@@ -6,11 +6,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"mime"
 	"mime/multipart"
 	"mime/quotedprintable"
 	"net/mail"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +24,8 @@ import (
 )
 
 const imapCommandTimeout = 10 * time.Second
+
+var remoteImageSrcPattern = regexp.MustCompile(`(?i)(<img\b[^>]*?)\s+src\s*=\s*("https?://[^"]*"|'https?://[^']*'|https?://[^\s>]+)`)
 
 type deadlineReadWriteCloser interface {
 	io.ReadWriteCloser
@@ -83,6 +87,7 @@ func (c *imapClient) listMailboxes() ([]Mailbox, error) {
 	for _, name := range names {
 		mailboxes = append(mailboxes, mailboxFromIMAPName(name))
 	}
+	sortMailboxes(mailboxes)
 	if len(mailboxes) == 0 {
 		mailboxes = append(mailboxes, mailboxFromIMAPName("INBOX"))
 	}
@@ -178,6 +183,7 @@ func (c *imapClient) messageSummaries(accountID string, mailboxID string, query 
 	if err != nil {
 		return nil, err
 	}
+	sortMessagesNewestFirst(messages)
 	query = strings.ToLower(strings.TrimSpace(query))
 	summaries := make([]MessageSummary, 0, len(messages))
 	for _, message := range messages {
@@ -365,6 +371,36 @@ func responseFlagged(line string) bool {
 
 func skipMailboxListResponse(name string, noselect bool) bool {
 	return noselect || name == "."
+}
+
+func sortMailboxes(mailboxes []Mailbox) {
+	sort.SliceStable(mailboxes, func(i, j int) bool {
+		leftOrder := mailboxKindOrder(mailboxes[i].Kind)
+		rightOrder := mailboxKindOrder(mailboxes[j].Kind)
+		if leftOrder != rightOrder {
+			return leftOrder < rightOrder
+		}
+		return strings.ToLower(mailboxes[i].Label) < strings.ToLower(mailboxes[j].Label)
+	})
+}
+
+func mailboxKindOrder(kind string) int {
+	switch kind {
+	case "inbox":
+		return 0
+	case "sent":
+		return 1
+	case "drafts":
+		return 2
+	case "archive":
+		return 3
+	case "spam":
+		return 4
+	case "trash":
+		return 5
+	default:
+		return 100
+	}
 }
 
 func sentMailboxName(names []string) string {
@@ -572,6 +608,37 @@ func parseRawMessage(accountID string, mailboxID string, uid string, raw []byte)
 	}, nil
 }
 
+func sortMessagesNewestFirst(messages []Message) {
+	sort.SliceStable(messages, func(i, j int) bool {
+		leftDate, leftOK := parsedMailDate(messages[i].FullDate)
+		rightDate, rightOK := parsedMailDate(messages[j].FullDate)
+		if leftOK && rightOK && !leftDate.Equal(rightDate) {
+			return leftDate.After(rightDate)
+		}
+		if leftOK != rightOK {
+			return leftOK
+		}
+		return messageUID(messages[i].ID) > messageUID(messages[j].ID)
+	})
+}
+
+func parsedMailDate(value string) (time.Time, bool) {
+	parsed, err := mail.ParseDate(value)
+	return parsed, err == nil
+}
+
+func messageUID(id string) int {
+	_, uid, err := decodeMessageID(id)
+	if err != nil {
+		return 0
+	}
+	parsed, err := strconv.Atoi(uid)
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
 func parseMessageBody(header mail.Header, body io.Reader) ([]string, string, []Attachment, bool) {
 	contentType := header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
@@ -681,16 +748,28 @@ func decodeCharset(name string, value []byte) []byte {
 
 func sanitizeMailHTML(value string) (string, bool) {
 	remoteImagesBlocked := hasRemoteImage(value)
+	value = blockRemoteImageSources(value)
 	policy := bluemonday.NewPolicy()
 	policy.AllowStandardURLs()
-	policy.AllowElements("a", "b", "blockquote", "br", "code", "div", "em", "hr", "i", "li", "ol", "p", "pre", "span", "strong", "table", "tbody", "td", "th", "thead", "tr", "u", "ul")
+	policy.AllowElements("a", "b", "blockquote", "br", "code", "div", "em", "hr", "i", "img", "li", "ol", "p", "pre", "span", "strong", "table", "tbody", "td", "th", "thead", "tr", "u", "ul")
 	policy.AllowAttrs("href").OnElements("a")
+	policy.AllowAttrs("alt", "data-joomail-remote-src", "height", "width").OnElements("img")
 	return policy.Sanitize(value), remoteImagesBlocked
 }
 
 func hasRemoteImage(value string) bool {
-	lower := strings.ToLower(value)
-	return strings.Contains(lower, "<img") && (strings.Contains(lower, "src=\"http://") || strings.Contains(lower, "src=\"https://") || strings.Contains(lower, "src='http://") || strings.Contains(lower, "src='https://"))
+	return remoteImageSrcPattern.MatchString(value)
+}
+
+func blockRemoteImageSources(value string) string {
+	return remoteImageSrcPattern.ReplaceAllStringFunc(value, func(match string) string {
+		parts := remoteImageSrcPattern.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+		url := strings.Trim(parts[2], `"'`)
+		return parts[1] + ` data-joomail-remote-src="` + html.EscapeString(url) + `"`
+	})
 }
 
 func splitParagraphs(text string) []string {

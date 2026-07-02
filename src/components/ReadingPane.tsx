@@ -14,6 +14,7 @@ export function ReadingPane({ message, mode, onRetry, onReply }: ReadingPaneProp
   const [recipientsOpen, setRecipientsOpen] = useState(false);
   const [quotedOpen, setQuotedOpen] = useState(false);
   const [showRemoteImages, setShowRemoteImages] = useState(false);
+  const htmlBody = message?.htmlBody ? revealRemoteImages(message.htmlBody, showRemoteImages) : "";
 
   useEffect(() => {
     setRecipientsOpen(false);
@@ -94,7 +95,7 @@ export function ReadingPane({ message, mode, onRetry, onReply }: ReadingPaneProp
           </div>
         ) : null}
         {message.htmlBody ? (
-          <article className="max-w-[750px] text-sm leading-[1.5] text-text [&_a]:text-accent [&_a]:underline [&_li]:mb-1 [&_ol]:mb-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-5 [&_ul]:mb-5 [&_ul]:list-disc [&_ul]:pl-5" dangerouslySetInnerHTML={{ __html: message.htmlBody }} />
+          <article className="max-w-[750px] text-sm leading-[1.5] text-text [&_a]:text-accent [&_a]:underline [&_img:not([src])]:hidden [&_img]:max-w-full [&_li]:mb-1 [&_ol]:mb-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-5 [&_ul]:mb-5 [&_ul]:list-disc [&_ul]:pl-5" dangerouslySetInnerHTML={{ __html: htmlBody }} />
         ) : (
           <article className="max-w-[750px] whitespace-pre-line text-sm leading-[1.5] text-text">
             {message.body.slice(0, 3).map((paragraph) => (
@@ -170,4 +171,9 @@ function IconButton({ icon, label }: { icon: "archive" | "trash" | "folder" | "m
       <Icon name={icon} className="h-[15px] w-[15px]" />
     </button>
   );
+}
+
+function revealRemoteImages(html: string, show: boolean) {
+  if (!show) return html;
+  return html.replace(/\sdata-joomail-remote-src=/gi, " src=");
 }

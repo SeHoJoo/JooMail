@@ -136,6 +136,7 @@ func formatOutgoingMessage(from string, request sendRequest) string {
 	headers := []string{
 		"From: " + from,
 		"To: " + strings.Join(request.To, ", "),
+		"Date: " + time.Now().Format(time.RFC1123Z),
 	}
 	if len(request.Cc) > 0 {
 		headers = append(headers, "Cc: "+strings.Join(request.Cc, ", "))

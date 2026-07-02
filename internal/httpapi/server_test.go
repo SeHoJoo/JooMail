@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -283,6 +284,72 @@ func TestAccountsParseUnquotedMailboxNamesWithDotDelimiter(t *testing.T) {
 	}
 }
 
+func TestAccountsOrderInboxFirst(t *testing.T) {
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin:   func(username, password string) string { return "OK LOGIN completed" },
+		mailboxes: []string{"Trash", "Sent", "INBOX", "Archive"},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var body struct {
+		Accounts []Account `json:"accounts"`
+	}
+	decode(t, recorder, &body)
+	if len(body.Accounts) != 1 || len(body.Accounts[0].Mailboxes) == 0 {
+		t.Fatalf("accounts = %#v", body.Accounts)
+	}
+	if body.Accounts[0].Mailboxes[0].ID != "inbox" {
+		t.Fatalf("first mailbox = %#v, want inbox first", body.Accounts[0].Mailboxes[0])
+	}
+}
+
+func TestMessageSummariesOrderNewestFirst(t *testing.T) {
+	oldMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Old message",
+		"Date: Thu, 2 Jul 2026 08:00:00 +0900",
+		"",
+		"Older body.",
+	}, "\r\n")
+	newMessage := strings.Join([]string{
+		"From: Bob <bob@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: New message",
+		"Date: Thu, 2 Jul 2026 09:00:00 +0900",
+		"",
+		"Newer body.",
+	}, "\r\n")
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin:             func(username, password string) string { return "OK LOGIN completed" },
+		fetchResponsesAsc:   true,
+		messages:            map[string]map[string]string{"INBOX": {"1": oldMessage, "2": newMessage}},
+		orderedSearchResult: []string{"1", "2"},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts/jooseho%40good-night.co.kr/mailboxes/inbox/messages", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var body struct {
+		Messages []MessageSummary `json:"messages"`
+	}
+	decode(t, recorder, &body)
+	if len(body.Messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(body.Messages))
+	}
+	if body.Messages[0].Subject != "New message" {
+		t.Fatalf("subjects = %#v, want newest first", []string{body.Messages[0].Subject, body.Messages[1].Subject})
+	}
+}
+
 func TestMessageSummariesParseUnreadAndFlaggedFromIMAPFlags(t *testing.T) {
 	rawMessage := strings.Join([]string{
 		"From: Alice <alice@example.com>",
@@ -407,10 +474,16 @@ func TestParseRawMessageMultipartAlternativeSanitizesHTML(t *testing.T) {
 	if !strings.Contains(message.HTMLBody, "Hello") || !strings.Contains(message.HTMLBody, "safe") {
 		t.Fatalf("htmlBody = %q, want sanitized HTML body", message.HTMLBody)
 	}
-	for _, unsafe := range []string{"script", "alert", "onerror", "tracker.example"} {
+	for _, unsafe := range []string{"script", "alert", "onerror"} {
 		if strings.Contains(strings.ToLower(message.HTMLBody), unsafe) {
 			t.Fatalf("htmlBody = %q, contains unsafe content %q", message.HTMLBody, unsafe)
 		}
+	}
+	if strings.Contains(message.HTMLBody, "<img src=\"https://tracker.example/pixel.png\"") {
+		t.Fatalf("htmlBody = %q, remote image src should be blocked until requested", message.HTMLBody)
+	}
+	if !strings.Contains(message.HTMLBody, "data-joomail-remote-src=\"https://tracker.example/pixel.png\"") {
+		t.Fatalf("htmlBody = %q, want remote image URL preserved in data attribute", message.HTMLBody)
 	}
 	if !message.RemoteImagesBlocked {
 		t.Fatal("remoteImagesBlocked = false, want true for remote image HTML")
@@ -691,13 +764,15 @@ func credentialFiles(t *testing.T, dir string) []string {
 }
 
 type fakeIMAPScript struct {
-	onLogin      func(username, password string) string
-	onSelect     func(mailbox string) string
-	onAppend     func(mailbox string, message string) string
-	mailboxes    []string
-	mailboxLines []string
-	messages     map[string]map[string]string
-	flags        map[string]map[string]string
+	onLogin             func(username, password string) string
+	onSelect            func(mailbox string) string
+	onAppend            func(mailbox string, message string) string
+	mailboxes           []string
+	mailboxLines        []string
+	messages            map[string]map[string]string
+	flags               map[string]map[string]string
+	orderedSearchResult []string
+	fetchResponsesAsc   bool
 }
 
 func startFakeIMAPServer(t *testing.T, script fakeIMAPScript) (string, string) {
@@ -783,13 +858,18 @@ func handleFakeIMAPConn(conn net.Conn, script fakeIMAPScript) {
 			}
 			switch strings.ToUpper(fields[2]) {
 			case "SEARCH":
-				var uids []string
-				for uid := range script.messages[selectedMailbox] {
-					uids = append(uids, uid)
+				uids := append([]string{}, script.orderedSearchResult...)
+				if len(uids) == 0 {
+					for uid := range script.messages[selectedMailbox] {
+						uids = append(uids, uid)
+					}
 				}
 				_, _ = fmt.Fprintf(conn, "* SEARCH %s\r\n%s OK SEARCH completed\r\n", strings.Join(uids, " "), tag)
 			case "FETCH":
 				uidSet := strings.Split(fields[3], ",")
+				if script.fetchResponsesAsc {
+					sort.Strings(uidSet)
+				}
 				for _, uid := range uidSet {
 					raw := script.messages[selectedMailbox][uid]
 					if raw == "" {
