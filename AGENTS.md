@@ -18,6 +18,13 @@ Future phases may add:
 - Persistence
 - Dovecot/Postfix deployment/configuration support
 
+## Deployment
+- GitHub Actions deploys through the JooMail self-hosted runner.
+- Push a `joomail-v*` tag or run `.github/workflows/deploy.yml` manually to deploy.
+- Deployment follows the PillowCare server pattern: build on the runner, upload artifacts to `mail.good-night.co.kr`, install under `/opt/JooMail`, and restart the `joomail` systemd service.
+- The deployed service uses `JOOMAIL_ADDR=127.0.0.1:8081` and serves built frontend files from `/opt/JooMail/www`.
+- Keep reverse proxy, TLS, DNS, and firewall changes outside the repo unless explicitly requested.
+
 ## Required Reading Before Implementation
 Before editing code, read:
 - `docs/webmail-ui-plan.md`

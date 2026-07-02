@@ -1,0 +1,124 @@
+name: Deploy JooMail
+
+on:
+  push:
+    tags:
+      - "joomail-v*"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-joomail
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy JooMail
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+    timeout-minutes: 12
+    env:
+      DEPLOY_HOST: mail.good-night.co.kr
+      DEPLOY_PORT: "22"
+      DEPLOY_USER: ubuntu
+      JOOMAIL_ADDR: 127.0.0.1:8081
+      JOOMAIL_BINARY_PATH: /opt/JooMail/bin/joomaild
+      JOOMAIL_STATIC_PATH: /opt/JooMail/www
+      JOOMAIL_SERVICE_NAME: joomail
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Test backend
+        run: go test ./...
+
+      - name: Build frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build Linux backend binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -o /tmp/joomaild ./cmd/joomaild
+          tar -C dist -czf /tmp/joomail-www.tar.gz .
+          cat > /tmp/joomail.service <<'SERVICE'
+          [Unit]
+          Description=JooMail Webmail
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          EnvironmentFile=/etc/joomail/backend.env
+          ExecStart=/opt/JooMail/bin/joomaild
+          Restart=always
+          RestartSec=5
+          User=ubuntu
+          Group=ubuntu
+          NoNewPrivileges=true
+          PrivateTmp=true
+
+          [Install]
+          WantedBy=multi-user.target
+          SERVICE
+
+      - name: Upload artifacts to production server
+        run: |
+          scp -P "${DEPLOY_PORT}" \
+            /tmp/joomaild \
+            /tmp/joomail-www.tar.gz \
+            /tmp/joomail.service \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/"
+
+      - name: Install artifacts and restart service
+        run: |
+          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "set -eu
+             sudo -n mkdir -p /opt/JooMail/bin /etc/joomail
+             sudo -n install -o ubuntu -g ubuntu -m 0755 /tmp/joomaild ${JOOMAIL_BINARY_PATH}.new
+             sudo -n mv ${JOOMAIL_BINARY_PATH}.new ${JOOMAIL_BINARY_PATH}
+
+             rm -rf /tmp/joomail-www
+             mkdir -p /tmp/joomail-www
+             tar -xzf /tmp/joomail-www.tar.gz -C /tmp/joomail-www
+             sudo -n rm -rf ${JOOMAIL_STATIC_PATH}.new
+             sudo -n mkdir -p ${JOOMAIL_STATIC_PATH}.new
+             sudo -n cp -a /tmp/joomail-www/. ${JOOMAIL_STATIC_PATH}.new/
+             sudo -n chown -R ubuntu:ubuntu ${JOOMAIL_STATIC_PATH}.new
+             sudo -n rm -rf ${JOOMAIL_STATIC_PATH}.prev
+             if [ -d ${JOOMAIL_STATIC_PATH} ]; then sudo -n mv ${JOOMAIL_STATIC_PATH} ${JOOMAIL_STATIC_PATH}.prev; fi
+             sudo -n mv ${JOOMAIL_STATIC_PATH}.new ${JOOMAIL_STATIC_PATH}
+
+             if [ ! -f /etc/joomail/backend.env ]; then
+               printf 'JOOMAIL_ADDR=%s\nJOOMAIL_STATIC_DIR=%s\n' '${JOOMAIL_ADDR}' '${JOOMAIL_STATIC_PATH}' | sudo -n tee /etc/joomail/backend.env >/dev/null
+               sudo -n chown root:root /etc/joomail/backend.env
+               sudo -n chmod 0644 /etc/joomail/backend.env
+             fi
+
+             sudo -n install -o root -g root -m 0644 /tmp/joomail.service /etc/systemd/system/${JOOMAIL_SERVICE_NAME}.service
+             sudo -n systemctl daemon-reload
+             sudo -n systemctl enable ${JOOMAIL_SERVICE_NAME}
+             sudo -n systemctl restart ${JOOMAIL_SERVICE_NAME}
+             sudo -n systemctl is-active --quiet ${JOOMAIL_SERVICE_NAME}
+             rm -rf /tmp/joomaild /tmp/joomail-www /tmp/joomail-www.tar.gz /tmp/joomail.service"
+          rm -f /tmp/joomaild /tmp/joomail-www.tar.gz /tmp/joomail.service
+
+      - name: Smoke test deployed backend
+        run: |
+          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "curl -fsS http://${JOOMAIL_ADDR}/api/health && \
+             curl -fsS http://${JOOMAIL_ADDR}/"

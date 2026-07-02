@@ -15,6 +15,10 @@ func main() {
 	}
 
 	server := httpapi.NewServer(httpapi.MockStore())
+	if staticDir := os.Getenv("JOOMAIL_STATIC_DIR"); staticDir != "" {
+		server = httpapi.WithStaticFiles(server, staticDir)
+	}
+
 	log.Printf("joomail backend listening on http://%s", addr)
 	if err := http.ListenAndServe(addr, server); err != nil {
 		log.Fatal(err)
