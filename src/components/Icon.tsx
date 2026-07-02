@@ -44,7 +44,7 @@ const paths: Record<IconProps["name"], string[]> = {
   draft: ["M5 4h10l4 4v12H5V4Z", "M14 4v5h5"],
   archive: ["M4 7h16v13H4V7Z", "M3 4h18v3H3V4Z", "M9 12h6"],
   spam: ["M12 3 21 19H3L12 3Z", "M12 9v4", "M12 17h.01"],
-  trash: ["M5 7h14", "M9 7V5h6v2", "M8 10v9", "M12 10v9", "M16 10v9"],
+  trash: ["M4 7h16", "M9 7V5h6v2", "M7 7l1 13h8l1-13", "M10 11v5", "M14 11v5"],
   folder: ["M3 6h7l2 2h9v10H3V6Z"],
   reply: ["M10 8 5 12l5 4", "M6 12h8a5 5 0 0 1 5 5v1"],
   replyAll: ["M8 8 3 12l5 4", "M13 8 8 12l5 4", "M9 12h6a5 5 0 0 1 5 5v1"],
