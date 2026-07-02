@@ -275,11 +275,13 @@ export function AppShell() {
         account={selectedAccount}
         messages={visibleMessages}
         selectedId={selectedMessageId}
+        checkedIds={checkedIds}
         search={search}
         mode={mode}
         onRetry={retry}
         onCompose={openCompose}
         onSelectMessage={setSelectedMessageId}
+        onToggleChecked={toggleChecked}
       />
       <div className="hidden h-screen flex-col md:flex">
         <Toolbar search={search} searchInputRef={searchInputRef} onSearch={handleSearch} onCompose={openCompose} />

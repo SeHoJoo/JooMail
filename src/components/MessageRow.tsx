@@ -10,7 +10,7 @@ type MessageRowProps = {
   onToggleChecked: () => void;
 };
 
-function highlight(text: string, search = "") {
+export function highlight(text: string, search = "") {
   if (!search.trim()) return text;
   const index = text.toLowerCase().indexOf(search.toLowerCase());
   if (index === -1) return text;
