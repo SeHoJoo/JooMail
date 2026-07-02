@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Account, Message, MockMode } from "../types";
+import type { Account, Mailbox, Message, MockMode } from "../types";
 import { Icon } from "./Icon";
 import { highlight } from "./MessageRow";
 import { EmptyState, ErrorState, LoadingState } from "./StateViews";
@@ -9,14 +9,17 @@ type MobileInboxProps = {
   messages: Message[];
   selectedMessage?: Message;
   selectedId?: string;
+  selectedMailboxId: string;
   checkedIds: Set<string>;
   search: string;
   mode: MockMode;
+  showRemoteImagesByDefault: boolean;
   onRetry: () => void;
   onCompose: () => void;
   onReply: (messageId: string) => void;
   onSearch: (value: string) => void;
   onSelectMessage: (id: string) => void;
+  onSelectMailbox: (id: string) => void;
   onToggleChecked: (id: string) => void;
   onToggleFlagged: (message: Message) => void;
   onClearChecked: () => void;
@@ -24,10 +27,12 @@ type MobileInboxProps = {
   onBulkTrash: () => Promise<void> | void;
 };
 
-export function MobileInbox({ account, messages, selectedMessage, selectedId, checkedIds, search, mode, onRetry, onCompose, onReply, onSearch, onSelectMessage, onToggleChecked, onToggleFlagged, onClearChecked, onBulkArchive, onBulkTrash }: MobileInboxProps) {
+export function MobileInbox({ account, messages, selectedMessage, selectedId, selectedMailboxId, checkedIds, search, mode, showRemoteImagesByDefault, onRetry, onCompose, onReply, onSearch, onSelectMessage, onSelectMailbox, onToggleChecked, onToggleFlagged, onClearChecked, onBulkArchive, onBulkTrash }: MobileInboxProps) {
   const [readingId, setReadingId] = useState("");
+  const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(Boolean(search));
-  const title = search ? "검색 결과" : "받은편지함";
+  const mailboxTitle = findMailbox(account.mailboxes, selectedMailboxId)?.label ?? "받은편지함";
+  const title = search ? "검색 결과" : mailboxTitle;
   const checkedCount = checkedIds.size;
   const selecting = checkedCount > 0;
   const count = search ? messages.length : messages.length === 0 && mode === "normal" ? 0 : account.unread;
@@ -42,22 +47,31 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, ch
   }, [messages, readingId]);
 
   if (readingMessage) {
-    return <MobileReadingPane message={readingMessage} onBack={() => setReadingId("")} onReply={onReply} onToggleFlagged={onToggleFlagged} />;
+    return <MobileReadingPane message={readingMessage} showRemoteImagesByDefault={showRemoteImagesByDefault} onBack={() => setReadingId("")} onReply={onReply} onToggleFlagged={onToggleFlagged} />;
   }
 
   return (
     <main className="min-h-screen bg-white pb-28 md:hidden">
-      <div className="flex h-12 items-center px-6 pt-2 text-sm font-bold text-ink">
-        <span>9:14</span>
-        <span className="ml-auto text-xs font-medium">▮▮  Wi-Fi  ▭</span>
-      </div>
-      <div className="flex items-center gap-5 px-6 pt-2">
-        <Icon name="menu" className="h-[18px] w-[18px] text-ink" />
+      <div className="flex items-center gap-5 px-6 pt-5">
+        <button className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-ink hover:bg-[#f6f7f8]" aria-label="폴더 열기" onClick={() => setFolderMenuOpen(true)} type="button">
+          <Icon name="menu" className="h-[18px] w-[18px]" />
+        </button>
         <div className="flex min-w-0 items-center gap-2 rounded-full border border-line px-2 py-1.5 text-[12.5px] font-medium text-ink">
           <span className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-accent text-[9px] font-bold text-white">{account.initials}</span>
           <span className="truncate">{account.email}</span>
         </div>
       </div>
+      {folderMenuOpen ? (
+        <MobileFolderDrawer
+          account={account}
+          selectedMailboxId={selectedMailboxId}
+          onClose={() => setFolderMenuOpen(false)}
+          onSelectMailbox={(id) => {
+            onSelectMailbox(id);
+            setFolderMenuOpen(false);
+          }}
+        />
+      ) : null}
       <div className="flex items-center px-6 pt-6">
         <h1 className="text-2xl font-bold text-ink">{title}</h1>
         {count > 0 || search ? <span className="ml-2 text-[15px] font-medium text-accent">{count}</span> : null}
@@ -156,14 +170,99 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, ch
   );
 }
 
-function MobileReadingPane({ message, onBack, onReply, onToggleFlagged }: { message: Message; onBack: () => void; onReply: (messageId: string) => void; onToggleFlagged: (message: Message) => void }) {
+function MobileFolderDrawer({ account, selectedMailboxId, onSelectMailbox, onClose }: { account: Account; selectedMailboxId: string; onSelectMailbox: (id: string) => void; onClose: () => void }) {
+  const system = account.mailboxes.filter((mailbox) => mailbox.kind !== "folder");
+  const folders = account.mailboxes.filter((mailbox) => mailbox.kind === "folder");
+
+  return (
+    <div className="fixed inset-0 z-30 bg-black/20" role="presentation" onMouseDown={onClose}>
+      <section className="h-full w-[286px] bg-panel shadow-compose" aria-label="폴더" onMouseDown={(event) => event.stopPropagation()}>
+        <header className="flex h-[69px] items-center gap-3 border-b border-line px-4">
+          <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-accent text-[12px] font-bold text-white">{account.initials}</span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13.5px] font-medium text-ink">{account.email}</span>
+            <span className="block truncate text-[11.5px] text-muted">{account.label}</span>
+          </span>
+          <button className="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-white hover:text-text" aria-label="폴더 닫기" onClick={onClose} type="button">
+            <Icon name="close" className="h-4 w-4" />
+          </button>
+        </header>
+        <nav className="py-2">
+          {system.map((mailbox) => (
+            <MobileMailboxButton key={mailbox.id} mailbox={mailbox} selectedId={selectedMailboxId} onSelect={onSelectMailbox} />
+          ))}
+        </nav>
+        {folders.length ? (
+          <>
+            <div className="mt-3 px-4 text-[11px] font-bold text-[#9aa0a8]">폴더</div>
+            <nav className="mt-2 bg-white py-1">
+              {folders.map((mailbox) => (
+                <MobileMailboxButton key={mailbox.id} mailbox={mailbox} selectedId={selectedMailboxId} onSelect={onSelectMailbox} />
+              ))}
+            </nav>
+          </>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function MobileMailboxButton({ mailbox, selectedId, level = 0, onSelect }: { mailbox: Mailbox; selectedId: string; level?: number; onSelect: (id: string) => void }) {
+  const selected = selectedId === mailbox.id;
+
+  return (
+    <div>
+      <button
+        className={[
+          "mx-[11px] flex h-9 w-[calc(100%-22px)] items-center gap-2 rounded-md px-2 text-left text-[13px]",
+          selected ? "bg-selected font-medium text-[#1b47a0]" : "text-[#3a3f45] hover:bg-white",
+        ].join(" ")}
+        style={{ paddingLeft: `${10 + level * 14}px` }}
+        onClick={() => onSelect(mailbox.id)}
+        type="button"
+      >
+        <Icon name={iconByKind[mailbox.kind]} className="h-4 w-4 shrink-0" />
+        <span className="min-w-0 flex-1 truncate">{mailbox.label}</span>
+        {mailbox.unread ? <span className={selected ? "font-bold text-[#1b47a0]" : "text-muted"}>{mailbox.unread}</span> : null}
+      </button>
+      {mailbox.children?.map((child) => (
+        <MobileMailboxButton key={child.id} mailbox={child} selectedId={selectedId} level={level + 1} onSelect={onSelect} />
+      ))}
+    </div>
+  );
+}
+
+function findMailbox(mailboxes: Mailbox[], id: string): Mailbox | undefined {
+  for (const mailbox of mailboxes) {
+    if (mailbox.id === id) return mailbox;
+    const child = findMailbox(mailbox.children ?? [], id);
+    if (child) return child;
+  }
+  return undefined;
+}
+
+const iconByKind: Record<Mailbox["kind"], Parameters<typeof Icon>[0]["name"]> = {
+  inbox: "inbox",
+  starred: "star",
+  sent: "send",
+  drafts: "draft",
+  archive: "archive",
+  spam: "spam",
+  trash: "trash",
+  folder: "folder",
+};
+
+function MobileReadingPane({ message, showRemoteImagesByDefault, onBack, onReply, onToggleFlagged }: { message: Message; showRemoteImagesByDefault: boolean; onBack: () => void; onReply: (messageId: string) => void; onToggleFlagged: (message: Message) => void }) {
+  const [showRemoteImages, setShowRemoteImages] = useState(showRemoteImagesByDefault);
+  const htmlBody = message.htmlBody ? revealRemoteImages(message.htmlBody, showRemoteImages) : "";
+
+  useEffect(() => {
+    setShowRemoteImages(showRemoteImagesByDefault);
+  }, [message.id, showRemoteImagesByDefault]);
+
   return (
     <main className="min-h-screen bg-white pb-24 md:hidden">
-      <div className="flex h-12 items-center px-6 pt-2 text-sm font-bold text-ink">
-        <span>9:14</span>
-        <span className="ml-auto text-xs font-medium">▮▮  Wi-Fi  ▭</span>
-      </div>
-      <div className="flex h-14 items-center border-b border-line px-4">
+      <div className="flex h-14 items-center border-b border-line px-4 pt-2">
         <button className="flex h-9 w-9 items-center justify-center rounded-lg text-ink hover:bg-[#f6f7f8]" aria-label="메일 목록으로 돌아가기" onClick={onBack} type="button">
           <Icon name="chevron" className="h-4 w-4 rotate-90" />
         </button>
@@ -185,8 +284,23 @@ function MobileReadingPane({ message, onBack, onReply, onToggleFlagged }: { mess
           </div>
           <div className="shrink-0 text-right text-[12px] text-muted">{message.time}</div>
         </div>
+        {message.remoteImagesBlocked && !showRemoteImages ? (
+          <div className="mt-5 flex min-h-10 items-center rounded-lg bg-[#f7f8f9] px-3 py-2 text-[12.5px] text-text">
+            <Icon name="image" className="mr-3 h-4 w-4 shrink-0 text-muted" />
+            <span className="min-w-0 flex-1">원격 이미지가 차단되었습니다.</span>
+            <button className="ml-3 shrink-0 font-medium text-accent" onClick={() => setShowRemoteImages(true)} type="button">
+              이미지 표시
+            </button>
+          </div>
+        ) : null}
+        {message.remoteImagesBlocked && showRemoteImages ? (
+          <div className="mt-5 flex min-h-10 items-center rounded-lg bg-selected px-3 py-2 text-[12.5px] text-accent">
+            <Icon name="image" className="mr-3 h-4 w-4 shrink-0" />
+            원격 이미지 표시됨
+          </div>
+        ) : null}
         {message.htmlBody ? (
-          <div className="mt-6 text-[14px] leading-6 text-text [&_a]:text-accent [&_a]:underline [&_li]:mb-1 [&_ol]:mb-4 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-4 [&_ul]:mb-4 [&_ul]:list-disc [&_ul]:pl-5" dangerouslySetInnerHTML={{ __html: message.htmlBody }} />
+          <div className="mt-6 text-[14px] leading-6 text-text [&_a]:text-accent [&_a]:underline [&_img:not([src])]:hidden [&_img]:max-w-full [&_li]:mb-1 [&_ol]:mb-4 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-4 [&_ul]:mb-4 [&_ul]:list-disc [&_ul]:pl-5" dangerouslySetInnerHTML={{ __html: htmlBody }} />
         ) : (
           <div className="mt-6 space-y-4 text-[14px] leading-6 text-text">
             {message.body.length ? message.body.map((paragraph, index) => <p key={`${index}-${paragraph}`}>{paragraph}</p>) : <p className="text-muted">본문을 불러오는 중입니다.</p>}
@@ -206,4 +320,9 @@ function MobileReadingPane({ message, onBack, onReply, onToggleFlagged }: { mess
       </article>
     </main>
   );
+}
+
+function revealRemoteImages(html: string, show: boolean) {
+  if (!show) return html;
+  return html.replace(/\sdata-joomail-remote-src=/gi, " src=");
 }

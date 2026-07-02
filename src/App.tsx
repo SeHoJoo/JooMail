@@ -6,11 +6,14 @@ import { MessageList } from "./components/MessageList";
 import { MobileInbox } from "./components/MobileInbox";
 import { ReadingPane } from "./components/ReadingPane";
 import { Sidebar } from "./components/Sidebar";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { Toolbar } from "./components/Toolbar";
 import { DevStateSwitcher, type QaState } from "./components/DevStateSwitcher";
 import { LoginPage } from "./components/LoginPage";
 
 const LIST_WIDTH_KEY = "joomail:list-width";
+const REMOTE_IMAGES_KEY = "joomail:remote-images";
+const DEFAULT_LIST_WIDTH = 388;
 const QA_STATES: QaState[] = ["normal", "loading", "error", "empty", "empty-reading", "search", "search-empty", "multiselect", "compose"];
 const SEARCH_QA_QUERY = "MIME";
 const SEARCH_EMPTY_QA_QUERY = "qa-no-results-000";
@@ -75,7 +78,9 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   const [apiMessages, setApiMessages] = useState<Message[]>([]);
   const [selectedMessageDetail, setSelectedMessageDetail] = useState<Message | undefined>();
   const [reloadToken, setReloadToken] = useState(0);
-  const [listWidth, setListWidth] = useState(() => Number(localStorage.getItem(LIST_WIDTH_KEY)) || 388);
+  const [listWidth, setListWidth] = useState(() => Number(localStorage.getItem(LIST_WIDTH_KEY)) || DEFAULT_LIST_WIDTH);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [showRemoteImagesByDefault, setShowRemoteImagesByDefault] = useState(() => localStorage.getItem(REMOTE_IMAGES_KEY) === "true");
   const [forceEmptyList, setForceEmptyList] = useState(false);
   const shellRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -112,6 +117,10 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   useEffect(() => {
     localStorage.setItem(LIST_WIDTH_KEY, String(listWidth));
   }, [listWidth]);
+
+  useEffect(() => {
+    localStorage.setItem(REMOTE_IMAGES_KEY, String(showRemoteImagesByDefault));
+  }, [showRemoteImagesByDefault]);
 
   useEffect(() => {
     if (!useApi) return;
@@ -190,6 +199,12 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && settingsOpen) {
+        event.preventDefault();
+        setSettingsOpen(false);
+        return;
+      }
+
       if (event.key === "Escape" && composeOpen) {
         event.preventDefault();
         closeCompose();
@@ -265,7 +280,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [checkedIds.size, composeOpen, search, selectedMessageId, visibleMessages]);
+  }, [checkedIds.size, composeOpen, search, selectedMessageId, settingsOpen, visibleMessages]);
 
   function applyQaState(nextState: QaState) {
     const accountMessages = mockMessages.filter((message) => message.accountId === accountId);
@@ -343,6 +358,10 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     setForceEmptyList(false);
     triggerLoading();
     setMailboxId("inbox");
+  }
+
+  function resetListWidth() {
+    setListWidth(DEFAULT_LIST_WIDTH);
   }
 
   function handleSearch(nextSearch: string) {
@@ -566,14 +585,17 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         messages={visibleMessages}
         selectedMessage={selectedMessage}
         selectedId={selectedMessageId}
+        selectedMailboxId={mailboxId}
         checkedIds={checkedIds}
         search={search}
         mode={mode}
+        showRemoteImagesByDefault={showRemoteImagesByDefault}
         onRetry={retry}
         onCompose={openCompose}
         onReply={(messageId) => openReply("reply", messageId)}
         onSearch={handleSearch}
         onSelectMessage={setSelectedMessageId}
+        onSelectMailbox={selectMailbox}
         onToggleChecked={toggleChecked}
         onToggleFlagged={toggleFlagged}
         onClearChecked={() => setCheckedIds(new Set())}
@@ -581,7 +603,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         onBulkTrash={() => bulkMoveToKind("trash")}
       />
       <div className="hidden h-screen flex-col md:flex">
-        <Toolbar search={search} searchInputRef={searchInputRef} onSearch={handleSearch} onCompose={openCompose} onRefresh={retry} />
+        <Toolbar search={search} searchInputRef={searchInputRef} onSearch={handleSearch} onRefresh={retry} onSettings={() => setSettingsOpen(true)} />
         <div className="min-h-0 flex flex-1">
           <Sidebar
             accounts={accounts}
@@ -616,6 +638,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
             message={selectedMessage}
             mode={mode}
             mailboxes={flatMailboxes}
+            showRemoteImagesByDefault={showRemoteImagesByDefault}
             onRetry={retry}
             onReply={() => openReply("reply")}
             onReplyAll={() => openReply("replyAll")}
@@ -628,6 +651,16 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
           />
         </div>
       </div>
+      {settingsOpen ? (
+        <SettingsPanel
+          account={selectedAccount}
+          remoteImagesEnabled={showRemoteImagesByDefault}
+          onRemoteImagesChange={setShowRemoteImagesByDefault}
+          onResetListWidth={resetListWidth}
+          onLogout={useApi ? logout : undefined}
+          onClose={() => setSettingsOpen(false)}
+        />
+      ) : null}
       {composeOpen ? <ComposePanel accounts={accounts} account={selectedAccount} mode={composeMode} message={composeMessage} onClose={closeCompose} onSend={useApi ? sendDraft : undefined} /> : null}
       {import.meta.env.DEV && !composeOpen ? <DevStateSwitcher states={QA_STATES} onApply={applyQaState} /> : null}
     </div>

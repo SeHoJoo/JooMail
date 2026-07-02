@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/microcosm-cc/bluemonday"
 	"golang.org/x/text/encoding/htmlindex"
@@ -420,7 +421,7 @@ func (c *imapClient) fetchMessages(accountID string, mailboxID string, mailboxNa
 	} else if taggedStatus(responses) != "OK" {
 		return nil, errors.New("select failed")
 	}
-	responses, err := c.command("UID FETCH %s (BODY.PEEK[])", strings.Join(uids, ","))
+	responses, err := c.command("UID FETCH %s (FLAGS BODY.PEEK[])", strings.Join(uids, ","))
 	if err != nil {
 		return nil, err
 	}
@@ -686,8 +687,55 @@ func mailboxLabel(name string) string {
 		return "휴지통"
 	default:
 		parts := strings.Split(name, "/")
-		return parts[len(parts)-1]
+		return decodeIMAPModifiedUTF7(parts[len(parts)-1])
 	}
+}
+
+func decodeIMAPModifiedUTF7(value string) string {
+	var builder strings.Builder
+	for i := 0; i < len(value); {
+		if value[i] != '&' {
+			builder.WriteByte(value[i])
+			i++
+			continue
+		}
+		end := strings.IndexByte(value[i+1:], '-')
+		if end == -1 {
+			builder.WriteByte(value[i])
+			i++
+			continue
+		}
+		encoded := value[i+1 : i+1+end]
+		if encoded == "" {
+			builder.WriteByte('&')
+			i += 2
+			continue
+		}
+		decoded, ok := decodeModifiedUTF7Segment(encoded)
+		if !ok {
+			builder.WriteString(value[i : i+end+2])
+		} else {
+			builder.WriteString(decoded)
+		}
+		i += end + 2
+	}
+	return builder.String()
+}
+
+func decodeModifiedUTF7Segment(encoded string) (string, bool) {
+	base64Value := strings.ReplaceAll(encoded, ",", "/")
+	if remainder := len(base64Value) % 4; remainder != 0 {
+		base64Value += strings.Repeat("=", 4-remainder)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(base64Value)
+	if err != nil || len(decoded)%2 != 0 {
+		return "", false
+	}
+	words := make([]uint16, 0, len(decoded)/2)
+	for i := 0; i < len(decoded); i += 2 {
+		words = append(words, uint16(decoded[i])<<8|uint16(decoded[i+1]))
+	}
+	return string(utf16.Decode(words)), true
 }
 
 func mailboxKind(name string) string {

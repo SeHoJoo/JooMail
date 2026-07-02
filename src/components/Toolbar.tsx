@@ -5,11 +5,11 @@ type ToolbarProps = {
   search: string;
   searchInputRef?: RefObject<HTMLInputElement>;
   onSearch: (value: string) => void;
-  onCompose: () => void;
   onRefresh: () => void;
+  onSettings: () => void;
 };
 
-export function Toolbar({ search, searchInputRef, onSearch, onCompose, onRefresh }: ToolbarProps) {
+export function Toolbar({ search, searchInputRef, onSearch, onRefresh, onSettings }: ToolbarProps) {
   return (
     <header className="hidden h-[52px] shrink-0 items-center border-b border-line bg-white px-4 md:flex">
       <div className="flex items-center gap-4">
@@ -28,12 +28,12 @@ export function Toolbar({ search, searchInputRef, onSearch, onCompose, onRefresh
         />
         <span className="text-[11px] text-[#b6bbc2]">/</span>
       </label>
-      <button className="ml-auto hidden rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-white focus-visible:outline-offset-2 lg:block" onClick={onCompose}>
-        새 메일 쓰기
-      </button>
-      <div className="ml-5 flex gap-6 text-[#3a3f45]">
+      <div className="ml-auto flex gap-6 text-[#3a3f45]">
         <button aria-label="새로고침" onClick={onRefresh} type="button">
           <Icon name="refresh" className="h-[17px] w-[17px]" />
+        </button>
+        <button aria-label="설정" onClick={onSettings} type="button">
+          <Icon name="settings" className="h-[17px] w-[17px]" />
         </button>
       </div>
     </header>

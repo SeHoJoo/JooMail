@@ -1,4 +1,5 @@
 import type { Account } from "../types";
+import { Icon } from "./Icon";
 
 type AccountSwitcherProps = {
   accounts: Account[];
@@ -9,7 +10,7 @@ type AccountSwitcherProps = {
 
 export function AccountSwitcher({ accounts, selectedAccount, onSelectAccount, onLogout }: AccountSwitcherProps) {
   return (
-    <label className="flex h-[69px] items-center gap-3 border-b border-line px-4">
+    <label className="relative flex h-[69px] cursor-pointer items-center gap-3 border-b border-line px-4 hover:bg-[#f7f8f9]">
       <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-accent text-[12px] font-bold text-white">
         {selectedAccount.initials}
       </span>
@@ -17,8 +18,11 @@ export function AccountSwitcher({ accounts, selectedAccount, onSelectAccount, on
         <span className="block truncate text-[13.5px] font-medium text-ink">{selectedAccount.email}</span>
         <span className="block truncate text-[11.5px] text-muted">{selectedAccount.label}</span>
       </span>
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-line bg-white text-muted">
+        <Icon name="chevron" className="h-3.5 w-3.5" />
+      </span>
       <select
-        className="h-7 w-6 appearance-none bg-transparent text-transparent"
+        className="absolute inset-0 h-full w-full cursor-pointer appearance-none opacity-0"
         aria-label="계정 선택"
         value={selectedAccount.id}
         onChange={(event) => {

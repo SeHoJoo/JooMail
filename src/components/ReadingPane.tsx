@@ -7,6 +7,7 @@ type ReadingPaneProps = {
   message?: Message;
   mode: MockMode;
   mailboxes: Mailbox[];
+  showRemoteImagesByDefault: boolean;
   onRetry: () => void;
   onReply: () => void;
   onReplyAll: () => void;
@@ -18,10 +19,10 @@ type ReadingPaneProps = {
   onMarkUnread: (message: Message) => Promise<void> | void;
 };
 
-export function ReadingPane({ message, mode, mailboxes, onRetry, onReply, onReplyAll, onForward, onToggleFlagged, onArchive, onTrash, onMove, onMarkUnread }: ReadingPaneProps) {
+export function ReadingPane({ message, mode, mailboxes, showRemoteImagesByDefault, onRetry, onReply, onReplyAll, onForward, onToggleFlagged, onArchive, onTrash, onMove, onMarkUnread }: ReadingPaneProps) {
   const [recipientsOpen, setRecipientsOpen] = useState(false);
   const [quotedOpen, setQuotedOpen] = useState(false);
-  const [showRemoteImages, setShowRemoteImages] = useState(false);
+  const [showRemoteImages, setShowRemoteImages] = useState(showRemoteImagesByDefault);
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -31,11 +32,11 @@ export function ReadingPane({ message, mode, mailboxes, onRetry, onReply, onRepl
   useEffect(() => {
     setRecipientsOpen(false);
     setQuotedOpen(false);
-    setShowRemoteImages(false);
+    setShowRemoteImages(showRemoteImagesByDefault);
     setFolderMenuOpen(false);
     setMoreMenuOpen(false);
     setActionError("");
-  }, [message?.id]);
+  }, [message?.id, showRemoteImagesByDefault]);
 
   if (mode === "loading") return <section className="hidden min-w-0 flex-1 bg-white md:block"><LoadingState /></section>;
   if (mode === "error") return <section className="hidden min-w-0 flex-1 bg-white md:block"><ErrorState onRetry={onRetry} /></section>;

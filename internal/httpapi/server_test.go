@@ -331,6 +331,37 @@ func TestAccountsParseUnquotedMailboxNamesWithDotDelimiter(t *testing.T) {
 	}
 }
 
+func TestAccountsDecodeModifiedUTF7MailboxNames(t *testing.T) {
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		mailboxLines: []string{
+			`* LIST () "/" "INBOX"`,
+			`* LIST () "/" "&0UzCpNK4wMHHkA-"`,
+		},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var body struct {
+		Accounts []Account `json:"accounts"`
+	}
+	decode(t, recorder, &body)
+	if len(body.Accounts) != 1 {
+		t.Fatalf("accounts = %#v", body.Accounts)
+	}
+	var labels []string
+	for _, mailbox := range body.Accounts[0].Mailboxes {
+		labels = append(labels, mailbox.Label)
+	}
+	if !containsString(labels, "테스트상자") {
+		t.Fatalf("labels = %#v, want decoded Korean mailbox label", labels)
+	}
+}
+
 func TestAccountsOrderInboxFirst(t *testing.T) {
 	host, port := startFakeIMAPServer(t, fakeIMAPScript{
 		onLogin:   func(username, password string) string { return "OK LOGIN completed" },
@@ -427,6 +458,46 @@ func TestMessageSummariesParseUnreadAndFlaggedFromIMAPFlags(t *testing.T) {
 	}
 	if !body.Messages[0].Unread || !body.Messages[0].Flagged {
 		t.Fatalf("message flags = unread %v flagged %v, want true/true", body.Messages[0].Unread, body.Messages[0].Flagged)
+	}
+}
+
+func TestMessageSummariesFetchFlagsFromIMAP(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Read message",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"",
+		"Hello from IMAP.",
+	}, "\r\n")
+	var fetchDataItems string
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		onFetch: func(mailbox string, uidSet string, dataItems string) {
+			fetchDataItems = dataItems
+		},
+		messages: map[string]map[string]string{"INBOX": {"7": rawMessage}},
+		flags:    map[string]map[string]string{"INBOX": {"7": `(\Seen)`}},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts/jooseho%40good-night.co.kr/mailboxes/inbox/messages", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if !strings.Contains(strings.ToUpper(fetchDataItems), "FLAGS") {
+		t.Fatalf("FETCH data items = %q, want FLAGS requested", fetchDataItems)
+	}
+	var body struct {
+		Messages []MessageSummary `json:"messages"`
+	}
+	decode(t, recorder, &body)
+	if len(body.Messages) != 1 {
+		t.Fatalf("message count = %d, want 1", len(body.Messages))
+	}
+	if body.Messages[0].Unread {
+		t.Fatalf("unread = true, want false from server \\Seen flag")
 	}
 }
 
@@ -1034,6 +1105,7 @@ type fakeIMAPScript struct {
 	onAppend            func(mailbox string, message string) string
 	onStore             func(mailbox string, uid string, operation string, flag string) string
 	onMove              func(mailbox string, uid string, target string) string
+	onFetch             func(mailbox string, uidSet string, dataItems string)
 	mailboxes           []string
 	mailboxLines        []string
 	messages            map[string]map[string]string
@@ -1133,6 +1205,9 @@ func handleFakeIMAPConn(conn net.Conn, script fakeIMAPScript) {
 				}
 				_, _ = fmt.Fprintf(conn, "* SEARCH %s\r\n%s OK SEARCH completed\r\n", strings.Join(uids, " "), tag)
 			case "FETCH":
+				if script.onFetch != nil {
+					script.onFetch(selectedMailbox, fields[3], strings.Join(fields[4:], " "))
+				}
 				uidSet := strings.Split(fields[3], ",")
 				if script.fetchResponsesAsc {
 					sort.Strings(uidSet)
