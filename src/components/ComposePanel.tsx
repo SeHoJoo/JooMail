@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { Account, Message } from "../types";
 import { Icon } from "./Icon";
 
@@ -8,6 +9,12 @@ type ComposePanelProps = {
 };
 
 export function ComposePanel({ account, message, onClose }: ComposePanelProps) {
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    bodyRef.current?.focus();
+  }, []);
+
   return (
     <section className="fixed inset-0 z-30 flex flex-col bg-white md:inset-auto md:bottom-[15px] md:right-5 md:h-[599px] md:w-[580px] md:rounded-[10px] md:shadow-compose">
       <div className="flex h-[38px] shrink-0 items-center rounded-t-[10px] bg-[#1e2126] px-4 text-white">
@@ -44,6 +51,7 @@ export function ComposePanel({ account, message, onClose }: ComposePanelProps) {
         <div className="truncate text-[13.5px] font-bold text-ink">{message ? `Re: ${message.subject}` : ""}</div>
       </div>
       <textarea
+        ref={bodyRef}
         className="min-h-0 flex-1 resize-none border-0 px-4 py-4 text-[13.5px] leading-[1.55] text-text outline-none"
         defaultValue={
           message

@@ -28,6 +28,7 @@ export function MessageRow({ message, selected, checked, search, onSelect, onTog
     <button
       className={[
         "group relative flex h-[67.5px] w-full items-start border-b border-line text-left",
+        "focus-visible:z-10 focus-visible:bg-selected focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent",
         selected ? "bg-selected" : "bg-white hover:bg-[#fafbfc]",
         checked ? "bg-selected/70" : "",
       ].join(" ")}

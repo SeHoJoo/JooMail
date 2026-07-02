@@ -7,8 +7,12 @@ import { MobileInbox } from "./components/MobileInbox";
 import { ReadingPane } from "./components/ReadingPane";
 import { Sidebar } from "./components/Sidebar";
 import { Toolbar } from "./components/Toolbar";
+import { DevStateSwitcher, type QaState } from "./components/DevStateSwitcher";
 
 const LIST_WIDTH_KEY = "joomail:list-width";
+const QA_STATES: QaState[] = ["normal", "loading", "error", "empty", "empty-reading", "search", "search-empty", "multiselect", "compose"];
+const SEARCH_QA_QUERY = "MIME";
+const SEARCH_EMPTY_QA_QUERY = "qa-no-results-000";
 
 export default function App() {
   return <AppShell />;
@@ -23,11 +27,15 @@ export function AppShell() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [mode, setMode] = useState<MockMode>("normal");
   const [listWidth, setListWidth] = useState(() => Number(localStorage.getItem(LIST_WIDTH_KEY)) || 388);
+  const [forceEmptyList, setForceEmptyList] = useState(false);
   const shellRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const initialQaAppliedRef = useRef(false);
 
   const selectedAccount = accounts.find((account) => account.id === accountId) ?? accounts[0];
 
   const visibleMessages = useMemo(() => {
+    if (forceEmptyList) return [];
     const accountMessages = allMessages.filter((message) => message.accountId === accountId);
     if (search.trim()) {
       const query = search.trim().toLowerCase();
@@ -36,9 +44,9 @@ export function AppShell() {
       );
     }
     return accountMessages.filter((message) => message.mailboxId === mailboxId);
-  }, [accountId, mailboxId, search]);
+  }, [accountId, forceEmptyList, mailboxId, search]);
 
-  const selectedMessage = visibleMessages.find((message) => message.id === selectedMessageId) ?? visibleMessages[0];
+  const selectedMessage = visibleMessages.find((message) => message.id === selectedMessageId);
   const selectedMailbox = selectedAccount.mailboxes
     .flatMap((mailbox) => [mailbox, ...(mailbox.children ?? [])])
     .find((mailbox) => mailbox.id === mailboxId);
@@ -48,14 +56,114 @@ export function AppShell() {
   }, [listWidth]);
 
   useEffect(() => {
-    if (!visibleMessages.some((message) => message.id === selectedMessageId)) {
+    if (!visibleMessages.length) {
+      if (selectedMessageId) setSelectedMessageId("");
+      return;
+    }
+    if (selectedMessageId && !visibleMessages.some((message) => message.id === selectedMessageId)) {
       setSelectedMessageId(visibleMessages[0]?.id ?? "");
     }
   }, [selectedMessageId, visibleMessages]);
 
+  useEffect(() => {
+    if (initialQaAppliedRef.current) return;
+    initialQaAppliedRef.current = true;
+
+    const qaParam = new URLSearchParams(window.location.search).get("qa");
+    if (isQaState(qaParam)) {
+      applyQaState(qaParam);
+    }
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (isTypingTarget(event.target)) return;
+
+      if (event.key === "/") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        return;
+      }
+
+      if (event.key === "c") {
+        event.preventDefault();
+        setComposeOpen(true);
+        return;
+      }
+
+      if (event.key === "Escape") {
+        if (composeOpen) {
+          event.preventDefault();
+          setComposeOpen(false);
+          return;
+        }
+        if (checkedIds.size > 0) {
+          event.preventDefault();
+          setCheckedIds(new Set());
+          return;
+        }
+        if (search) {
+          event.preventDefault();
+          setSearch("");
+        }
+        return;
+      }
+
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        if (!visibleMessages.length) return;
+        event.preventDefault();
+        const currentIndex = visibleMessages.findIndex((message) => message.id === selectedMessageId);
+        const fallbackIndex = event.key === "ArrowDown" ? -1 : visibleMessages.length;
+        const nextIndex =
+          event.key === "ArrowDown"
+            ? Math.min(visibleMessages.length - 1, (currentIndex === -1 ? fallbackIndex : currentIndex) + 1)
+            : Math.max(0, (currentIndex === -1 ? fallbackIndex : currentIndex) - 1);
+        setSelectedMessageId(visibleMessages[nextIndex].id);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [checkedIds.size, composeOpen, search, selectedMessageId, visibleMessages]);
+
+  function applyQaState(nextState: QaState) {
+    const accountMessages = allMessages.filter((message) => message.accountId === accountId);
+    const inboxMessages = accountMessages.filter((message) => message.mailboxId === "inbox");
+    const firstInboxId = inboxMessages[0]?.id ?? "";
+    const searchMessages = accountMessages.filter((message) =>
+      [message.sender, message.subject, message.snippet, ...message.body].some((field) => field.toLowerCase().includes(SEARCH_QA_QUERY.toLowerCase())),
+    );
+
+    setForceEmptyList(nextState === "empty");
+    setMode(nextState === "loading" || nextState === "error" ? nextState : "normal");
+    setMailboxId("inbox");
+    setSearch("");
+    setCheckedIds(new Set());
+    setComposeOpen(nextState === "compose");
+    setSelectedMessageId(firstInboxId);
+
+    if (nextState === "empty" || nextState === "empty-reading" || nextState === "search-empty") {
+      setSelectedMessageId("");
+    }
+
+    if (nextState === "search") {
+      setSearch(SEARCH_QA_QUERY);
+      setSelectedMessageId(searchMessages[0]?.id ?? "");
+    }
+
+    if (nextState === "search-empty") {
+      setSearch(SEARCH_EMPTY_QA_QUERY);
+    }
+
+    if (nextState === "multiselect") {
+      setCheckedIds(new Set(inboxMessages.slice(0, 3).map((message) => message.id)));
+    }
+  }
+
   function selectAccount(nextAccountId: string) {
     setAccountId(nextAccountId);
     setMailboxId("inbox");
+    setForceEmptyList(false);
     setCheckedIds(new Set());
     triggerLoading();
   }
@@ -63,19 +171,27 @@ export function AppShell() {
   function selectMailbox(nextMailboxId: string) {
     setMailboxId(nextMailboxId);
     setSearch("");
+    setForceEmptyList(false);
     setCheckedIds(new Set());
     setMode(nextMailboxId === "spam" ? "error" : "loading");
     window.setTimeout(() => setMode(nextMailboxId === "spam" ? "error" : "normal"), 420);
   }
 
   function triggerLoading() {
+    setForceEmptyList(false);
     setMode("loading");
     window.setTimeout(() => setMode("normal"), 420);
   }
 
   function retry() {
+    setForceEmptyList(false);
     triggerLoading();
     setMailboxId("inbox");
+  }
+
+  function handleSearch(nextSearch: string) {
+    setForceEmptyList(false);
+    setSearch(nextSearch);
   }
 
   function toggleChecked(id: string) {
@@ -110,7 +226,7 @@ export function AppShell() {
     <div className="min-h-screen bg-white text-ink" style={{ "--list-width": `${listWidth}px` } as React.CSSProperties} ref={shellRef}>
       <MobileInbox account={selectedAccount} messages={visibleMessages.length ? visibleMessages : allMessages.filter((message) => message.accountId === accountId)} onCompose={() => setComposeOpen(true)} onSelectMessage={setSelectedMessageId} />
       <div className="hidden h-screen flex-col md:flex">
-        <Toolbar search={search} onSearch={setSearch} onCompose={() => setComposeOpen(true)} />
+        <Toolbar search={search} searchInputRef={searchInputRef} onSearch={handleSearch} onCompose={() => setComposeOpen(true)} />
         <div className="min-h-0 flex flex-1">
           <Sidebar
             accounts={accounts}
@@ -138,6 +254,17 @@ export function AppShell() {
         </div>
       </div>
       {composeOpen ? <ComposePanel account={selectedAccount} message={selectedMessage} onClose={() => setComposeOpen(false)} /> : null}
+      {import.meta.env.DEV ? <DevStateSwitcher states={QA_STATES} onApply={applyQaState} /> : null}
     </div>
   );
+}
+
+function isQaState(value: string | null): value is QaState {
+  return QA_STATES.includes(value as QaState);
+}
+
+function isTypingTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  const tagName = target.tagName.toLowerCase();
+  return tagName === "input" || tagName === "textarea" || tagName === "select" || target.isContentEditable;
 }

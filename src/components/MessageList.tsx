@@ -27,9 +27,15 @@ export function MessageList({ title, unreadCount, messages, selectedId, checkedI
           <input className="h-[15px] w-[15px] accent-accent" checked readOnly type="checkbox" />
           <span className="ml-3 text-[13px] font-medium">{checkedCount}개 선택됨</span>
           <div className="ml-auto flex gap-5 text-[#3a3f45]">
-            <Icon name="archive" className="h-4 w-4" />
-            <Icon name="trash" className="h-4 w-4" />
-            <Icon name="folder" className="h-4 w-4" />
+            <button aria-label="선택 메일 보관">
+              <Icon name="archive" className="h-4 w-4" />
+            </button>
+            <button aria-label="선택 메일 삭제">
+              <Icon name="trash" className="h-4 w-4" />
+            </button>
+            <button aria-label="선택 메일 이동">
+              <Icon name="folder" className="h-4 w-4" />
+            </button>
             <button aria-label="선택 해제" onClick={onClearChecked}>
               <Icon name="close" className="h-4 w-4" />
             </button>
@@ -40,7 +46,9 @@ export function MessageList({ title, unreadCount, messages, selectedId, checkedI
           <input className="h-[15px] w-[15px] accent-accent" type="checkbox" aria-label="전체 선택" />
           <div className="ml-3 truncate text-[13.5px] font-bold text-ink">{search ? `'${search}' 결과 ${messages.length}건` : title}</div>
           <div className="ml-auto text-[11.5px] text-muted">{search ? "현재 계정 전체" : `안읽음 ${unreadCount}`}</div>
-          <Icon name="refresh" className="ml-4 h-[15px] w-[15px] text-muted" />
+          <button className="ml-4 text-muted" aria-label="메일 목록 새로고침">
+            <Icon name="refresh" className="h-[15px] w-[15px]" />
+          </button>
         </div>
       )}
       {search ? (
