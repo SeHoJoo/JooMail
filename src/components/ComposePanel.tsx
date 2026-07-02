@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Account, Message } from "../types";
 import { Icon } from "./Icon";
 
@@ -10,10 +10,17 @@ type ComposePanelProps = {
 
 export function ComposePanel({ account, message, onClose }: ComposePanelProps) {
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const [recipientText, setRecipientText] = useState("");
+  const [subject, setSubject] = useState(() => (message ? `Re: ${message.subject}` : ""));
 
   useEffect(() => {
     bodyRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    setRecipientText("");
+    setSubject(message ? `Re: ${message.subject}` : "");
+  }, [message]);
 
   return (
     <section className="fixed inset-0 z-40 flex flex-col bg-white md:inset-auto md:bottom-[15px] md:right-5 md:h-[599px] md:w-[580px] md:rounded-[10px] md:shadow-compose" data-compose-panel>
@@ -34,7 +41,7 @@ export function ComposePanel({ account, message, onClose }: ComposePanelProps) {
         </div>
       </div>
       <div className="flex h-[55px] shrink-0 items-center border-b border-line px-4">
-        <label className="w-[90px] text-xs text-muted">보내는 사람</label>
+        <label className="w-[90px] shrink-0 text-xs text-muted">보내는 사람</label>
         <button className="flex h-[30px] min-w-0 flex-1 items-center gap-2 rounded-[7px] border border-line px-1.5 text-[12.5px] text-ink md:flex-none md:w-[220px]">
           <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-accent text-[8px] font-bold text-white">{account.initials}</span>
           <span className="truncate">{account.email}</span>
@@ -42,19 +49,36 @@ export function ComposePanel({ account, message, onClose }: ComposePanelProps) {
         </button>
       </div>
       <div className="flex h-[50px] shrink-0 items-center border-b border-line px-4">
-        <label className="w-[90px] text-xs text-muted">받는사람</label>
+        <label className="w-[90px] shrink-0 text-xs text-muted" htmlFor="compose-to">
+          받는사람
+        </label>
         {message ? (
-          <span className="flex items-center gap-1.5 rounded-md bg-[#eceef1] px-2.5 py-1 text-[12.5px] text-text">
-            {message.sender}
+          <span className="flex max-w-[120px] shrink-0 items-center gap-1.5 rounded-md bg-[#eceef1] px-2.5 py-1 text-[12.5px] text-text md:max-w-[180px]">
+            <span className="truncate">{message.sender}</span>
             <span className="text-xs text-muted">×</span>
           </span>
         ) : null}
-        <span className="ml-3 min-w-0 flex-1 truncate text-[12.5px] text-muted">이름 또는 이메일 입력...</span>
-        <button className="ml-auto text-xs text-accent">참조/숨은참조</button>
+        <input
+          id="compose-to"
+          className="ml-3 min-w-0 flex-1 border-0 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-muted focus-visible:outline-none"
+          value={recipientText}
+          onChange={(event) => setRecipientText(event.target.value)}
+          aria-label="받는사람"
+          placeholder={message ? "" : "이름 또는 이메일 입력..."}
+        />
+        <button className="ml-2 shrink-0 text-xs text-accent">참조/숨은참조</button>
       </div>
       <div className="flex h-[43px] shrink-0 items-center border-b border-line px-4">
-        <label className="w-[90px] text-xs text-muted">제목</label>
-        <div className="truncate text-[13.5px] font-bold text-ink">{message ? `Re: ${message.subject}` : ""}</div>
+        <label className="w-[90px] shrink-0 text-xs text-muted" htmlFor="compose-subject">
+          제목
+        </label>
+        <input
+          id="compose-subject"
+          className="min-w-0 flex-1 border-0 bg-transparent text-[13.5px] font-bold text-ink outline-none placeholder:text-muted focus-visible:outline-none"
+          value={subject}
+          onChange={(event) => setSubject(event.target.value)}
+          aria-label="제목"
+        />
       </div>
       <textarea
         ref={bodyRef}
