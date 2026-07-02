@@ -54,4 +54,13 @@ export type Message = {
   attachments?: Attachment[];
 };
 
+export type ComposeDraft = {
+  fromAccountId: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  textBody: string;
+};
+
 export type MockMode = "normal" | "loading" | "error";

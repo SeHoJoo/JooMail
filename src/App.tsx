@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { accounts, messages as allMessages } from "./data";
-import type { MockMode } from "./types";
+import { accounts as mockAccounts, messages as mockMessages } from "./data";
+import type { Account, ComposeDraft, Message, MockMode } from "./types";
 import { ComposePanel } from "./components/ComposePanel";
 import { MessageList } from "./components/MessageList";
 import { MobileInbox } from "./components/MobileInbox";
@@ -25,24 +25,55 @@ export default function App() {
 }
 
 function LoginGate() {
-  const [loginComplete, setLoginComplete] = useState(false);
+  const [accounts, setAccounts] = useState<Account[] | null>(null);
+  const [checking, setChecking] = useState(true);
 
-  if (!loginComplete) {
-    return <LoginPage onLoginSuccess={() => setLoginComplete(true)} />;
+  useEffect(() => {
+    checkSession();
+  }, []);
+
+  async function checkSession() {
+    setChecking(true);
+    try {
+      const body = await apiJSON<{ accounts: Account[] }>("/api/accounts");
+      setAccounts(body.accounts);
+    } catch {
+      setAccounts(null);
+    } finally {
+      setChecking(false);
+    }
   }
 
-  return <AppShell />;
+  if (checking) {
+    return <div className="min-h-screen bg-panel" />;
+  }
+
+  if (!accounts) {
+    return <LoginPage onLoginSuccess={() => checkSession()} />;
+  }
+
+  return <AppShell initialAccounts={accounts} onSessionExpired={() => setAccounts(null)} />;
 }
 
-export function AppShell() {
-  const [accountId, setAccountId] = useState(accounts[0].id);
+type AppShellProps = {
+  initialAccounts?: Account[];
+  onSessionExpired?: () => void;
+};
+
+export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
+  const useApi = Boolean(initialAccounts);
+  const [accounts] = useState<Account[]>(initialAccounts ?? mockAccounts);
+  const [accountId, setAccountId] = useState((initialAccounts ?? mockAccounts)[0].id);
   const [mailboxId, setMailboxId] = useState("inbox");
-  const [selectedMessageId, setSelectedMessageId] = useState("m1");
+  const [selectedMessageId, setSelectedMessageId] = useState(useApi ? "" : "m1");
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
   const [replyMessageId, setReplyMessageId] = useState<string | null>(null);
   const [mode, setMode] = useState<MockMode>("normal");
+  const [apiMessages, setApiMessages] = useState<Message[]>([]);
+  const [selectedMessageDetail, setSelectedMessageDetail] = useState<Message | undefined>();
+  const [reloadToken, setReloadToken] = useState(0);
   const [listWidth, setListWidth] = useState(() => Number(localStorage.getItem(LIST_WIDTH_KEY)) || 388);
   const [forceEmptyList, setForceEmptyList] = useState(false);
   const shellRef = useRef<HTMLDivElement>(null);
@@ -52,8 +83,9 @@ export function AppShell() {
   const selectedAccount = accounts.find((account) => account.id === accountId) ?? accounts[0];
 
   const visibleMessages = useMemo(() => {
+    if (useApi) return apiMessages;
     if (forceEmptyList) return [];
-    const accountMessages = allMessages.filter((message) => message.accountId === accountId);
+    const accountMessages = mockMessages.filter((message) => message.accountId === accountId);
     if (search.trim()) {
       const query = search.trim().toLowerCase();
       return accountMessages.filter((message) =>
@@ -61,10 +93,16 @@ export function AppShell() {
       );
     }
     return accountMessages.filter((message) => message.mailboxId === mailboxId);
-  }, [accountId, forceEmptyList, mailboxId, search]);
+  }, [accountId, apiMessages, forceEmptyList, mailboxId, search, useApi]);
 
-  const selectedMessage = visibleMessages.find((message) => message.id === selectedMessageId);
-  const composeMessage = replyMessageId ? allMessages.find((message) => message.id === replyMessageId) : undefined;
+  const selectedMessage = useApi ? selectedMessageDetail ?? visibleMessages.find((message) => message.id === selectedMessageId) : visibleMessages.find((message) => message.id === selectedMessageId);
+  const composeMessage = replyMessageId
+    ? useApi
+      ? selectedMessageDetail?.id === replyMessageId
+        ? selectedMessageDetail
+        : visibleMessages.find((message) => message.id === replyMessageId)
+      : mockMessages.find((message) => message.id === replyMessageId)
+    : undefined;
   const selectedMailbox = selectedAccount.mailboxes
     .flatMap((mailbox) => [mailbox, ...(mailbox.children ?? [])])
     .find((mailbox) => mailbox.id === mailboxId);
@@ -72,6 +110,57 @@ export function AppShell() {
   useEffect(() => {
     localStorage.setItem(LIST_WIDTH_KEY, String(listWidth));
   }, [listWidth]);
+
+  useEffect(() => {
+    if (!useApi) return;
+    let cancelled = false;
+    setMode("loading");
+    setSelectedMessageDetail(undefined);
+    apiJSON<{ messages: ApiMessage[] }>(`/api/accounts/${encodeURIComponent(accountId)}/mailboxes/${encodeURIComponent(mailboxId)}/messages${search ? `?q=${encodeURIComponent(search)}` : ""}`)
+      .then((body) => {
+        if (cancelled) return;
+        const nextMessages = body.messages.map(summaryToMessage);
+        setApiMessages(nextMessages);
+        setSelectedMessageId((current) => (current && nextMessages.some((message) => message.id === current) ? current : nextMessages[0]?.id ?? ""));
+        setMode("normal");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        if (isUnauthorized(error)) {
+          onSessionExpired?.();
+          return;
+        }
+        setApiMessages([]);
+        setSelectedMessageId("");
+        setMode("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId, mailboxId, onSessionExpired, reloadToken, search, useApi]);
+
+  useEffect(() => {
+    if (!useApi || !selectedMessageId) {
+      if (useApi) setSelectedMessageDetail(undefined);
+      return;
+    }
+    let cancelled = false;
+    apiJSON<{ message: ApiMessage }>(`/api/messages/${encodeURIComponent(selectedMessageId)}`)
+      .then((body) => {
+        if (!cancelled) setSelectedMessageDetail(normalizeMessage(body.message));
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        if (isUnauthorized(error)) {
+          onSessionExpired?.();
+          return;
+        }
+        setMode("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onSessionExpired, selectedMessageId, useApi]);
 
   useEffect(() => {
     if (!visibleMessages.length) {
@@ -173,7 +262,7 @@ export function AppShell() {
   }, [checkedIds.size, composeOpen, search, selectedMessageId, visibleMessages]);
 
   function applyQaState(nextState: QaState) {
-    const accountMessages = allMessages.filter((message) => message.accountId === accountId);
+    const accountMessages = mockMessages.filter((message) => message.accountId === accountId);
     const inboxMessages = accountMessages.filter((message) => message.mailboxId === "inbox");
     const firstInboxId = inboxMessages[0]?.id ?? "";
     const searchMessages = accountMessages.filter((message) =>
@@ -212,6 +301,11 @@ export function AppShell() {
     setMailboxId("inbox");
     setForceEmptyList(false);
     setCheckedIds(new Set());
+    if (useApi) {
+      setSearch("");
+      setSelectedMessageId("");
+      return;
+    }
     triggerLoading();
   }
 
@@ -220,6 +314,10 @@ export function AppShell() {
     setSearch("");
     setForceEmptyList(false);
     setCheckedIds(new Set());
+    if (useApi) {
+      setSelectedMessageId("");
+      return;
+    }
     setMode(nextMailboxId === "spam" ? "error" : "loading");
     window.setTimeout(() => setMode(nextMailboxId === "spam" ? "error" : "normal"), 420);
   }
@@ -231,6 +329,10 @@ export function AppShell() {
   }
 
   function retry() {
+    if (useApi) {
+      setReloadToken((value) => value + 1);
+      return;
+    }
     setForceEmptyList(false);
     triggerLoading();
     setMailboxId("inbox");
@@ -255,6 +357,28 @@ export function AppShell() {
   function closeCompose() {
     setComposeOpen(false);
     setReplyMessageId(null);
+  }
+
+  async function sendDraft(draft: ComposeDraft) {
+    try {
+      await apiJSON("/api/send", {
+        method: "POST",
+        body: JSON.stringify(draft),
+      });
+    } catch (error) {
+      if (isUnauthorized(error)) onSessionExpired?.();
+      throw error;
+    }
+  }
+
+  async function logout() {
+    try {
+      await apiJSON("/api/logout", { method: "POST" });
+    } catch {
+      // The local session should still be dropped if the server already expired it.
+    } finally {
+      onSessionExpired?.();
+    }
   }
 
   function toggleChecked(id: string) {
@@ -309,6 +433,7 @@ export function AppShell() {
             onSelectAccount={selectAccount}
             onSelectMailbox={selectMailbox}
             onCompose={openCompose}
+            onLogout={useApi ? logout : undefined}
           />
           <MessageList
             title={selectedMailbox?.label ?? "받은편지함"}
@@ -327,7 +452,7 @@ export function AppShell() {
           <ReadingPane message={selectedMessage} mode={mode} onRetry={retry} onReply={() => openReply()} />
         </div>
       </div>
-      {composeOpen ? <ComposePanel accounts={accounts} account={selectedAccount} message={composeMessage} onClose={closeCompose} /> : null}
+      {composeOpen ? <ComposePanel accounts={accounts} account={selectedAccount} message={composeMessage} onClose={closeCompose} onSend={useApi ? sendDraft : undefined} /> : null}
       {import.meta.env.DEV && !composeOpen ? <DevStateSwitcher states={QA_STATES} onApply={applyQaState} /> : null}
     </div>
   );
@@ -346,4 +471,45 @@ function isTypingTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
   const tagName = target.tagName.toLowerCase();
   return tagName === "input" || tagName === "textarea" || tagName === "select" || target.isContentEditable;
+}
+
+type ApiMessage = Omit<Message, "body"> & {
+  textBody?: string[];
+  body?: string[];
+};
+
+class ApiError extends Error {
+  status: number;
+
+  constructor(status: number) {
+    super(`API request failed with ${status}`);
+    this.status = status;
+  }
+}
+
+async function apiJSON<T = unknown>(path: string, init: RequestInit = {}) {
+  const headers = new Headers(init.headers);
+  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const response = await fetch(path, {
+    ...init,
+    headers,
+    credentials: "include",
+  });
+  if (!response.ok) throw new ApiError(response.status);
+  return (await response.json()) as T;
+}
+
+function isUnauthorized(error: unknown) {
+  return error instanceof ApiError && error.status === 401;
+}
+
+function summaryToMessage(message: ApiMessage): Message {
+  return normalizeMessage({ ...message, body: message.body ?? [] });
+}
+
+function normalizeMessage(message: ApiMessage): Message {
+  return {
+    ...message,
+    body: message.textBody ?? message.body ?? [],
+  };
 }

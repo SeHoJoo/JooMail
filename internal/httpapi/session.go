@@ -2,27 +2,42 @@ package httpapi
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"time"
 )
 
 const sessionDuration = 24 * time.Hour
+const rememberedSessionDuration = 30 * 24 * time.Hour
 
 type sessionPayload struct {
+	SessionID string    `json:"sessionId"`
 	Email     string    `json:"email"`
 	IssuedAt  time.Time `json:"issuedAt"`
 	ExpiresAt time.Time `json:"expiresAt"`
+	Remember  bool      `json:"remember"`
 }
 
-func newSessionToken(email string, issuedAt time.Time, secret string) (string, sessionPayload, error) {
+func newSessionToken(email string, remember bool, issuedAt time.Time, secret string) (string, sessionPayload, error) {
+	duration := sessionDuration
+	if remember {
+		duration = rememberedSessionDuration
+	}
+	sessionID, err := newSessionID()
+	if err != nil {
+		return "", sessionPayload{}, err
+	}
 	payload := sessionPayload{
+		SessionID: sessionID,
 		Email:     email,
 		IssuedAt:  issuedAt.UTC(),
-		ExpiresAt: issuedAt.Add(sessionDuration).UTC(),
+		ExpiresAt: issuedAt.Add(duration).UTC(),
+		Remember:  remember,
 	}
 	if secret == "" {
 		return "", payload, errors.New("session secret is required")
@@ -64,6 +79,14 @@ func verifySessionToken(token string, secret string) (sessionPayload, error) {
 		return payload, errors.New("session expired")
 	}
 	return payload, nil
+}
+
+func newSessionID() (string, error) {
+	var bytes [32]byte
+	if _, err := io.ReadFull(rand.Reader, bytes[:]); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(bytes[:]), nil
 }
 
 func signSessionPayload(encodedPayload string, secret string) string {

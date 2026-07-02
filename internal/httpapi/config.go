@@ -17,6 +17,8 @@ type Config struct {
 	SMTPStartTLS   bool
 	SMTPUserFormat string
 	SessionSecret  string
+	CredentialKey  string
+	CredentialDir  string
 }
 
 func LoadConfig() Config {
@@ -39,6 +41,8 @@ func LoadConfig() Config {
 		// Empty secrets are allowed at startup so deploys do not crash;
 		// handleLogin fails closed until JOOMAIL_SESSION_SECRET is set.
 		SessionSecret: os.Getenv("JOOMAIL_SESSION_SECRET"),
+		CredentialKey: os.Getenv("JOOMAIL_CREDENTIAL_KEY"),
+		CredentialDir: os.Getenv("JOOMAIL_CREDENTIAL_DIR"),
 	}
 }
 

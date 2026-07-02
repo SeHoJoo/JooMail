@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Account, Message } from "../types";
+import type { Account, ComposeDraft, Message } from "../types";
 import { Icon } from "./Icon";
 
 type ComposePanelProps = {
@@ -7,6 +7,7 @@ type ComposePanelProps = {
   account: Account;
   message?: Message;
   onClose: () => void;
+  onSend?: (draft: ComposeDraft) => Promise<void>;
 };
 
 type MockAttachment = {
@@ -14,7 +15,7 @@ type MockAttachment = {
   size: string;
 };
 
-export function ComposePanel({ accounts, account, message, onClose }: ComposePanelProps) {
+export function ComposePanel({ accounts, account, message, onClose, onSend }: ComposePanelProps) {
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fromAccountId, setFromAccountId] = useState(account.id);
@@ -24,7 +25,14 @@ export function ComposePanel({ accounts, account, message, onClose }: ComposePan
   const [ccText, setCcText] = useState("");
   const [bccText, setBccText] = useState("");
   const [subject, setSubject] = useState(() => (message ? `Re: ${message.subject}` : ""));
+  const [body, setBody] = useState(() =>
+    message
+      ? `${message.sender}님, 자료 잘 받았습니다.\n\n`
+      : "",
+  );
   const [attachments, setAttachments] = useState<MockAttachment[]>([]);
+  const [sendError, setSendError] = useState("");
+  const [sending, setSending] = useState(false);
   const fromAccount = accounts.find((item) => item.id === fromAccountId) ?? account;
 
   useEffect(() => {
@@ -41,12 +49,35 @@ export function ComposePanel({ accounts, account, message, onClose }: ComposePan
     setBccText("");
     setShowCcBcc(false);
     setSubject(message ? `Re: ${message.subject}` : "");
+    setBody(message ? `${message.sender}님, 자료 잘 받았습니다.\n\n` : "");
+    setSendError("");
   }, [message]);
 
   function handleFiles(files: FileList | null) {
     if (!files?.length) return;
     setAttachments(Array.from(files).map((file) => ({ name: file.name, size: formatFileSize(file.size) })));
     if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  async function submitSend() {
+    if (!onSend || sending) return;
+    setSending(true);
+    setSendError("");
+    try {
+      await onSend({
+        fromAccountId,
+        to: parseRecipients(recipientText || message?.senderEmail || ""),
+        cc: parseRecipients(ccText),
+        bcc: parseRecipients(bccText),
+        subject,
+        textBody: body,
+      });
+      onClose();
+    } catch {
+      setSendError("메일을 보내지 못했습니다. 입력값과 서버 상태를 확인해 주세요.");
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
@@ -148,12 +179,12 @@ export function ComposePanel({ accounts, account, message, onClose }: ComposePan
       <textarea
         ref={bodyRef}
         className="min-h-0 flex-1 resize-none border-0 px-4 py-4 text-[13.5px] leading-[1.55] text-text outline-none focus-visible:outline-none"
-        defaultValue={
-          message
-            ? `${message.sender}님, 자료 잘 받았습니다. 첨부해 주신 로드맵 확인했고 몇 가지 코멘트 남겼습니다.\n\nMIME charset 변환 작업을 앞당긴 부분 특히 좋아요 — EUC-KR 메일 테스트 케이스를 제가 몇 개 더 준비해 두겠습니다.`
-            : ""
-        }
+        value={body}
+        onChange={(event) => setBody(event.target.value)}
       />
+      {sendError ? (
+        <div className="shrink-0 border-t border-[#f4d3d0] bg-[#fdf1f0] px-4 py-2 text-[12.5px] font-medium text-[#b23a30]">{sendError}</div>
+      ) : null}
       {attachments.length ? (
         <div className="shrink-0 border-t border-line px-4 py-2">
           <div className="mb-1 text-[11px] text-muted">첨부파일 {attachments.length}개</div>
@@ -169,8 +200,8 @@ export function ComposePanel({ accounts, account, message, onClose }: ComposePan
         </div>
       ) : null}
       <div className="flex h-[46px] shrink-0 items-center border-t border-line px-4">
-        <button className="flex items-center gap-1.5 rounded-[7px] bg-accent py-2 pl-4 pr-3 text-[13px] font-medium text-white">
-          보내기
+        <button className="flex items-center gap-1.5 rounded-[7px] bg-accent py-2 pl-4 pr-3 text-[13px] font-medium text-white disabled:opacity-70" onClick={submitSend} disabled={sending} type="button">
+          {sending ? "전송 중" : "보내기"}
           <Icon name="chevron" className="h-3 w-3" />
         </button>
         <div className="ml-6 flex gap-5 text-muted">
@@ -210,4 +241,11 @@ function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`;
   return `${Math.round(bytes / 1024 / 102.4) / 10} MB`;
+}
+
+function parseRecipients(value: string) {
+  return value
+    .split(/[,\n;]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }

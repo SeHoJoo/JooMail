@@ -20,6 +20,7 @@ var errInvalidCredentials = errors.New("invalid credentials")
 type loginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	Remember bool   `json:"remember"`
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -58,8 +59,22 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, payload, err := newSessionToken(email, time.Now(), s.config.SessionSecret)
+	token, payload, err := newSessionToken(email, request.Remember, time.Now(), s.config.SessionSecret)
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "login is unavailable")
+		return
+	}
+	credentials, err := newCredentialStore(s.config)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "login is unavailable")
+		return
+	}
+	if err := credentials.Save(payload.SessionID, storedCredential{
+		Email:        email,
+		IMAPUsername: localPart,
+		Password:     request.Password,
+		ExpiresAt:    payload.ExpiresAt,
+	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "login is unavailable")
 		return
 	}

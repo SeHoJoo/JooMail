@@ -24,7 +24,7 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, remember }),
       });
 
       if (!response.ok) {
