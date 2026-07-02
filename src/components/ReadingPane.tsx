@@ -153,8 +153,8 @@ export function ReadingPane({ message, mode, onRetry, onReply }: ReadingPaneProp
 
 function ActionButton({ icon, label, onClick }: { icon: "reply" | "replyAll" | "forward"; label: string; onClick: () => void }) {
   return (
-    <button className="flex h-8 items-center gap-[7px] rounded-[7px] border border-line bg-white px-[13px] text-[13px] font-medium text-text hover:border-[#d0d4d9] hover:bg-[#f6f7f8]" onClick={onClick}>
-      <Icon name={icon} className="h-[15px] w-[15px]" />
+    <button className="flex h-8 shrink-0 items-center gap-[7px] whitespace-nowrap rounded-[7px] border border-line bg-white px-[13px] text-[13px] font-medium text-text hover:border-[#d0d4d9] hover:bg-[#f6f7f8]" onClick={onClick}>
+      <Icon name={icon} className="h-[15px] w-[15px] shrink-0" />
       {label}
     </button>
   );
