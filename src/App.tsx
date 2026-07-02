@@ -649,6 +649,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         onClearChecked={() => setCheckedIds(new Set())}
         onBulkArchive={() => bulkMoveToKind("archive")}
         onBulkTrash={() => bulkMoveToKind("trash")}
+        onLogout={useApi ? logout : undefined}
       />
       <div className="hidden h-screen flex-col md:flex">
         <Toolbar search={search} searchInputRef={searchInputRef} onSearch={handleSearch} onRefresh={retry} onSettings={() => setSettingsOpen(true)} />

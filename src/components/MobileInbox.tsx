@@ -25,9 +25,10 @@ type MobileInboxProps = {
   onClearChecked: () => void;
   onBulkArchive: () => Promise<void> | void;
   onBulkTrash: () => Promise<void> | void;
+  onLogout?: () => void;
 };
 
-export function MobileInbox({ account, messages, selectedMessage, selectedId, selectedMailboxId, checkedIds, search, mode, showRemoteImagesByDefault, onRetry, onCompose, onReply, onSearch, onSelectMessage, onSelectMailbox, onToggleChecked, onToggleFlagged, onClearChecked, onBulkArchive, onBulkTrash }: MobileInboxProps) {
+export function MobileInbox({ account, messages, selectedMessage, selectedId, selectedMailboxId, checkedIds, search, mode, showRemoteImagesByDefault, onRetry, onCompose, onReply, onSearch, onSelectMessage, onSelectMailbox, onToggleChecked, onToggleFlagged, onClearChecked, onBulkArchive, onBulkTrash, onLogout }: MobileInboxProps) {
   const [readingId, setReadingId] = useState("");
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(Boolean(search));
@@ -70,6 +71,7 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, se
             onSelectMailbox(id);
             setFolderMenuOpen(false);
           }}
+          onLogout={onLogout}
         />
       ) : null}
       <div className="flex items-center px-6 pt-6">
@@ -170,13 +172,13 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, se
   );
 }
 
-function MobileFolderDrawer({ account, selectedMailboxId, onSelectMailbox, onClose }: { account: Account; selectedMailboxId: string; onSelectMailbox: (id: string) => void; onClose: () => void }) {
+function MobileFolderDrawer({ account, selectedMailboxId, onSelectMailbox, onClose, onLogout }: { account: Account; selectedMailboxId: string; onSelectMailbox: (id: string) => void; onClose: () => void; onLogout?: () => void }) {
   const system = account.mailboxes.filter((mailbox) => mailbox.kind !== "folder");
   const folders = account.mailboxes.filter((mailbox) => mailbox.kind === "folder");
 
   return (
     <div className="fixed inset-0 z-30 bg-black/20" role="presentation" onMouseDown={onClose}>
-      <section className="h-full w-[286px] bg-panel shadow-compose" aria-label="폴더" onMouseDown={(event) => event.stopPropagation()}>
+      <section className="flex h-full w-[286px] flex-col bg-panel shadow-compose" aria-label="폴더" onMouseDown={(event) => event.stopPropagation()}>
         <header className="flex h-[69px] items-center gap-3 border-b border-line px-4">
           <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-accent text-[12px] font-bold text-white">{account.initials}</span>
           <span className="min-w-0 flex-1">
@@ -201,6 +203,13 @@ function MobileFolderDrawer({ account, selectedMailboxId, onSelectMailbox, onClo
               ))}
             </nav>
           </>
+        ) : null}
+        {onLogout ? (
+          <div className="mt-auto border-t border-line px-[11px] py-4">
+            <button className="flex h-9 w-full items-center justify-center rounded-md border border-line bg-white text-[13px] font-medium text-text hover:bg-[#f7f8f9]" onClick={onLogout} type="button">
+              로그아웃
+            </button>
+          </div>
         ) : null}
       </section>
     </div>
