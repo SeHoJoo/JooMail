@@ -45,11 +45,11 @@ export function ReadingPane({ message, mode, onRetry, onReply }: ReadingPaneProp
           <ActionButton icon="reply" label="답장" onClick={onReply} />
           <ActionButton icon="replyAll" label="전체답장" onClick={onReply} />
           <ActionButton icon="forward" label="전달" onClick={onReply} />
-          <div className="ml-auto flex gap-2 text-[#3a3f45]">
-            <Icon name="archive" className="h-[15px] w-[15px]" />
-            <Icon name="trash" className="h-[15px] w-[15px]" />
-            <Icon name="folder" className="h-[15px] w-[15px]" />
-            <Icon name="more" className="h-[15px] w-[15px]" />
+          <div className="ml-auto flex gap-[5px] text-[#3a3f45]">
+            <IconButton icon="archive" label="보관" />
+            <IconButton icon="trash" label="삭제" />
+            <IconButton icon="folder" label="이동" />
+            <IconButton icon="more" label="더보기" />
           </div>
         </div>
       </div>
@@ -119,6 +119,14 @@ function ActionButton({ icon, label, onClick }: { icon: "reply" | "replyAll" | "
     <button className="flex items-center gap-1.5 rounded-[7px] border border-line bg-white px-3 py-[7px] text-[12.5px] font-medium text-text" onClick={onClick}>
       <Icon name={icon} className="h-3.5 w-3.5" />
       {label}
+    </button>
+  );
+}
+
+function IconButton({ icon, label }: { icon: "archive" | "trash" | "folder" | "more"; label: string }) {
+  return (
+    <button className="flex h-[30px] w-[30px] items-center justify-center rounded-md hover:bg-[#f7f8f9]" aria-label={label}>
+      <Icon name={icon} className="h-[15px] w-[15px]" />
     </button>
   );
 }
