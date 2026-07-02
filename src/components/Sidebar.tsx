@@ -1,4 +1,5 @@
 import type { Account } from "../types";
+import packageJSON from "../../package.json";
 import { AccountSwitcher } from "./AccountSwitcher";
 import { Icon } from "./Icon";
 import { MailboxItem } from "./MailboxItem";
@@ -39,11 +40,8 @@ export function Sidebar({ accounts, selectedAccount, selectedMailboxId, onSelect
       </nav>
       <div className="mt-auto px-[11px] pb-5 text-[11px] text-muted">
         <div className="flex justify-between">
-          <span>저장용량</span>
-          <span>{selectedAccount.storage}</span>
-        </div>
-        <div className="mt-2 h-1 rounded-full bg-[#e4e7ea]">
-          <div className="h-1 w-[41%] rounded-full bg-[#8b93a0]" />
+          <span>버전</span>
+          <span>v{packageJSON.version}</span>
         </div>
       </div>
     </aside>
