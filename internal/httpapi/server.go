@@ -34,6 +34,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/accounts", s.handleAccounts)
 	s.mux.HandleFunc("GET /api/accounts/{accountID}/mailboxes/{mailboxID}/messages", s.handleMessageSummaries)
 	s.mux.HandleFunc("GET /api/messages/{messageID}", s.handleMessage)
+	s.mux.HandleFunc("PATCH /api/messages/{messageID}/flagged", s.handleMessageFlagged)
+	s.mux.HandleFunc("PATCH /api/messages/{messageID}/seen", s.handleMessageSeen)
+	s.mux.HandleFunc("POST /api/messages/{messageID}/move", s.handleMessageMove)
 	s.mux.HandleFunc("POST /api/send", s.handleSend)
 }
 
@@ -118,6 +121,105 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"message": message})
+}
+
+func (s *Server) handleMessageFlagged(w http.ResponseWriter, r *http.Request) {
+	auth, ok := s.requireCredential(w, r)
+	if !ok {
+		return
+	}
+	messageID := strings.TrimSpace(r.PathValue("messageID"))
+	if messageID == "" {
+		writeError(w, http.StatusBadRequest, "messageId is required")
+		return
+	}
+	var request struct {
+		Flagged bool `json:"flagged"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid flagged request")
+		return
+	}
+	client, err := openIMAPSession(s.config, auth.credential)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "failed to update message")
+		return
+	}
+	defer client.Close()
+	if err := client.setMessageFlagged(messageID, request.Flagged); errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "message not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusBadGateway, "failed to update message")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"flagged": request.Flagged})
+}
+
+func (s *Server) handleMessageSeen(w http.ResponseWriter, r *http.Request) {
+	auth, ok := s.requireCredential(w, r)
+	if !ok {
+		return
+	}
+	messageID := strings.TrimSpace(r.PathValue("messageID"))
+	if messageID == "" {
+		writeError(w, http.StatusBadRequest, "messageId is required")
+		return
+	}
+	var request struct {
+		Seen bool `json:"seen"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid seen request")
+		return
+	}
+	client, err := openIMAPSession(s.config, auth.credential)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "failed to update message")
+		return
+	}
+	defer client.Close()
+	if err := client.setMessageSeen(messageID, request.Seen); errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "message not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusBadGateway, "failed to update message")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"seen": request.Seen})
+}
+
+func (s *Server) handleMessageMove(w http.ResponseWriter, r *http.Request) {
+	auth, ok := s.requireCredential(w, r)
+	if !ok {
+		return
+	}
+	messageID := strings.TrimSpace(r.PathValue("messageID"))
+	if messageID == "" {
+		writeError(w, http.StatusBadRequest, "messageId is required")
+		return
+	}
+	var request struct {
+		MailboxID string `json:"mailboxId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil || strings.TrimSpace(request.MailboxID) == "" {
+		writeError(w, http.StatusBadRequest, "invalid move request")
+		return
+	}
+	client, err := openIMAPSession(s.config, auth.credential)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "failed to move message")
+		return
+	}
+	defer client.Close()
+	if err := client.moveMessage(messageID, request.MailboxID); errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "message not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusBadGateway, "failed to move message")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "moved"})
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {

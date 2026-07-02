@@ -211,7 +211,137 @@ func (c *imapClient) message(accountID string, messageID string) (Message, error
 	if len(messages) == 0 {
 		return Message{}, ErrNotFound
 	}
-	return messages[0], nil
+	message := messages[0]
+	if message.Unread {
+		if err := c.markMessageSeen(uid); err != nil {
+			return Message{}, err
+		}
+		message.Unread = false
+	}
+	return message, nil
+}
+
+func (c *imapClient) markMessageSeen(uid string) error {
+	responses, err := c.command("UID STORE %s +FLAGS.SILENT (\\Seen)", uid)
+	if err != nil {
+		return err
+	}
+	if taggedStatus(responses) != "OK" {
+		return errors.New("store failed")
+	}
+	return nil
+}
+
+func (c *imapClient) setMessageSeen(messageID string, seen bool) error {
+	mailboxID, uid, err := decodeMessageID(messageID)
+	if err != nil {
+		return ErrNotFound
+	}
+	mailboxName, err := decodeMailboxID(mailboxID)
+	if err != nil {
+		return ErrNotFound
+	}
+	if responses, err := c.command("SELECT %s", quoteIMAPString(mailboxName)); err != nil {
+		return err
+	} else if taggedStatus(responses) != "OK" {
+		return ErrNotFound
+	}
+	operation := "+FLAGS.SILENT"
+	if !seen {
+		operation = "-FLAGS.SILENT"
+	}
+	responses, err := c.command("UID STORE %s %s (\\Seen)", uid, operation)
+	if err != nil {
+		return err
+	}
+	if taggedStatus(responses) != "OK" {
+		return errors.New("store failed")
+	}
+	return nil
+}
+
+func (c *imapClient) setMessageFlagged(messageID string, flagged bool) error {
+	mailboxID, uid, err := decodeMessageID(messageID)
+	if err != nil {
+		return ErrNotFound
+	}
+	mailboxName, err := decodeMailboxID(mailboxID)
+	if err != nil {
+		return ErrNotFound
+	}
+	if responses, err := c.command("SELECT %s", quoteIMAPString(mailboxName)); err != nil {
+		return err
+	} else if taggedStatus(responses) != "OK" {
+		return ErrNotFound
+	}
+	operation := "+FLAGS.SILENT"
+	if !flagged {
+		operation = "-FLAGS.SILENT"
+	}
+	responses, err := c.command("UID STORE %s %s (\\Flagged)", uid, operation)
+	if err != nil {
+		return err
+	}
+	if taggedStatus(responses) != "OK" {
+		return errors.New("store failed")
+	}
+	return nil
+}
+
+func (c *imapClient) moveMessage(messageID string, targetMailboxID string) error {
+	sourceMailboxID, uid, err := decodeMessageID(messageID)
+	if err != nil {
+		return ErrNotFound
+	}
+	sourceMailboxName, err := decodeMailboxID(sourceMailboxID)
+	if err != nil {
+		return ErrNotFound
+	}
+	targetMailboxName, err := decodeMailboxID(targetMailboxID)
+	if err != nil {
+		return ErrNotFound
+	}
+	if responses, err := c.command("SELECT %s", quoteIMAPString(sourceMailboxName)); err != nil {
+		return err
+	} else if taggedStatus(responses) != "OK" {
+		return ErrNotFound
+	}
+	responses, err := c.command("UID MOVE %s %s", uid, quoteIMAPString(targetMailboxName))
+	if err != nil {
+		return err
+	}
+	if taggedStatus(responses) == "OK" {
+		return nil
+	}
+	if err := c.copyThenDeleteMessage(uid, targetMailboxName); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *imapClient) copyThenDeleteMessage(uid string, targetMailboxName string) error {
+	responses, err := c.command("UID COPY %s %s", uid, quoteIMAPString(targetMailboxName))
+	if err != nil {
+		return err
+	}
+	if taggedStatus(responses) != "OK" {
+		return errors.New("copy failed")
+	}
+	responses, err = c.command("UID STORE %s +FLAGS.SILENT (\\Deleted)", uid)
+	if err != nil {
+		return err
+	}
+	if taggedStatus(responses) != "OK" {
+		return errors.New("store failed")
+	}
+	responses, err = c.command("EXPUNGE")
+	if err != nil {
+		return err
+	}
+	if taggedStatus(responses) != "OK" {
+		return errors.New("expunge failed")
+	}
+	return nil
 }
 
 func (c *imapClient) searchMailbox(mailboxName string) ([]string, error) {

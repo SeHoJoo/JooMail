@@ -8,6 +8,7 @@ type MessageRowProps = {
   search?: string;
   onSelect: () => void;
   onToggleChecked: () => void;
+  onToggleFlagged: () => void;
 };
 
 export function highlight(text: string, search = "") {
@@ -23,9 +24,9 @@ export function highlight(text: string, search = "") {
   );
 }
 
-export function MessageRow({ message, selected, checked, search, onSelect, onToggleChecked }: MessageRowProps) {
+export function MessageRow({ message, selected, checked, search, onSelect, onToggleChecked, onToggleFlagged }: MessageRowProps) {
   return (
-    <button
+    <div
       className={[
         "group relative flex h-[64px] w-full items-start border-b border-line text-left",
         "focus-visible:z-10 focus-visible:bg-selected focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent",
@@ -37,6 +38,14 @@ export function MessageRow({ message, selected, checked, search, onSelect, onTog
       data-selected={selected}
       onClick={onSelect}
       onFocus={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+      role="button"
+      tabIndex={0}
     >
       {selected ? <span className="absolute left-0 top-0 h-full w-0.5 bg-accent" /> : null}
       <span className="absolute left-[29px] top-[29px] h-1.5 w-1.5 rounded-full bg-accent opacity-0 data-[show=true]:opacity-100" data-show={message.unread} />
@@ -63,7 +72,20 @@ export function MessageRow({ message, selected, checked, search, onSelect, onTog
       </span>
       <span className="absolute left-[82px] right-[50px] top-[46px] truncate text-[11.5px] leading-[15px] text-[#a2a8b0]">{highlight(message.snippet, search)}</span>
       {message.hasAttachment ? <Icon name="paperclip" className="absolute right-[52px] top-[30px] h-[13px] w-[13px] text-muted" /> : null}
-      {message.flagged ? <Icon name="star" className="absolute right-[31px] top-[30px] h-[13px] w-[13px] fill-[#f5b514] text-[#f5b514]" /> : null}
-    </button>
+      <button
+        className={[
+          "absolute right-[27px] top-[26px] flex h-[21px] w-[21px] items-center justify-center rounded-md hover:bg-[#eef1f5]",
+          message.flagged ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus:opacity-100",
+        ].join(" ")}
+        aria-label={message.flagged ? "중요 표시 해제" : "중요 표시"}
+        onClick={(event) => {
+          event.stopPropagation();
+          onToggleFlagged();
+        }}
+        type="button"
+      >
+        <Icon name="star" className={message.flagged ? "h-[13px] w-[13px] fill-[#f5b514] text-[#f5b514]" : "h-[13px] w-[13px] text-muted"} />
+      </button>
+    </div>
   );
 }

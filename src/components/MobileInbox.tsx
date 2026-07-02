@@ -16,9 +16,13 @@ type MobileInboxProps = {
   onCompose: () => void;
   onSelectMessage: (id: string) => void;
   onToggleChecked: (id: string) => void;
+  onToggleFlagged: (message: Message) => void;
+  onClearChecked: () => void;
+  onBulkArchive: () => Promise<void> | void;
+  onBulkTrash: () => Promise<void> | void;
 };
 
-export function MobileInbox({ account, messages, selectedMessage, selectedId, checkedIds, search, mode, onRetry, onCompose, onSelectMessage, onToggleChecked }: MobileInboxProps) {
+export function MobileInbox({ account, messages, selectedMessage, selectedId, checkedIds, search, mode, onRetry, onCompose, onSelectMessage, onToggleChecked, onToggleFlagged, onClearChecked, onBulkArchive, onBulkTrash }: MobileInboxProps) {
   const [readingId, setReadingId] = useState("");
   const title = search ? "검색 결과" : "받은편지함";
   const checkedCount = checkedIds.size;
@@ -35,7 +39,7 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, ch
   }, [messages, readingId]);
 
   if (readingMessage) {
-    return <MobileReadingPane message={readingMessage} onBack={() => setReadingId("")} onCompose={onCompose} />;
+    return <MobileReadingPane message={readingMessage} onBack={() => setReadingId("")} onCompose={onCompose} onToggleFlagged={onToggleFlagged} />;
   }
 
   return (
@@ -46,11 +50,10 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, ch
       </div>
       <div className="flex items-center gap-5 px-6 pt-2">
         <Icon name="menu" className="h-[18px] w-[18px] text-ink" />
-        <button className="flex min-w-0 items-center gap-2 rounded-full border border-line px-2 py-1.5 text-[12.5px] font-medium text-ink">
+        <div className="flex min-w-0 items-center gap-2 rounded-full border border-line px-2 py-1.5 text-[12.5px] font-medium text-ink">
           <span className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-accent text-[9px] font-bold text-white">{account.initials}</span>
           <span className="truncate">{account.email}</span>
-          <Icon name="chevron" className="h-[11px] w-[11px] shrink-0 text-muted" />
-        </button>
+        </div>
       </div>
       <div className="flex items-center px-6 pt-6">
         <h1 className="text-2xl font-bold text-ink">{title}</h1>
@@ -60,8 +63,14 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, ch
       {search ? <div className="px-6 pt-2 text-[12.5px] text-muted">"{search}"에 대한 결과 {messages.length}건 · 현재 계정 전체</div> : null}
       {checkedCount > 0 ? (
         <div className="mt-5 flex h-11 items-center border-y border-line bg-selected px-6 text-accent">
-          <input className="h-[15px] w-[15px] accent-accent" checked readOnly type="checkbox" />
+          <input className="h-[15px] w-[15px] accent-accent" aria-label="선택 해제" checked onChange={onClearChecked} type="checkbox" />
           <span className="ml-3 text-[13px] font-medium">{checkedCount}개 선택됨</span>
+          <button className="ml-auto" aria-label="선택 메일 보관" onClick={onBulkArchive} type="button">
+            <Icon name="archive" className="h-4 w-4" />
+          </button>
+          <button className="ml-4" aria-label="선택 메일 삭제" onClick={onBulkTrash} type="button">
+            <Icon name="trash" className="h-4 w-4" />
+          </button>
         </div>
       ) : null}
       <div className="mt-7">
@@ -98,7 +107,7 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, ch
           >
             {selectedId === message.id ? <span className="absolute left-0 top-0 h-full w-0.5 bg-accent" /> : null}
             {message.unread ? <span className="absolute left-[50px] top-[30px] h-[7px] w-[7px] rounded-full bg-accent" /> : null}
-            <span className={selecting ? "block" : "hidden"}>
+            <span className="block">
               <input
                 aria-label={`${message.sender} 선택`}
                 className="absolute left-[18px] top-[39px] h-[15px] w-[15px] accent-accent"
@@ -131,7 +140,7 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, ch
   );
 }
 
-function MobileReadingPane({ message, onBack, onCompose }: { message: Message; onBack: () => void; onCompose: () => void }) {
+function MobileReadingPane({ message, onBack, onCompose, onToggleFlagged }: { message: Message; onBack: () => void; onCompose: () => void; onToggleFlagged: (message: Message) => void }) {
   return (
     <main className="min-h-screen bg-white pb-24 md:hidden">
       <div className="flex h-12 items-center px-6 pt-2 text-sm font-bold text-ink">
@@ -143,6 +152,9 @@ function MobileReadingPane({ message, onBack, onCompose }: { message: Message; o
           <Icon name="chevron" className="h-4 w-4 rotate-90" />
         </button>
         <div className="ml-2 min-w-0 flex-1 truncate text-[13px] font-semibold text-ink">{message.subject}</div>
+        <button className="ml-2 flex h-9 w-9 items-center justify-center rounded-lg text-ink hover:bg-[#f6f7f8]" aria-label={message.flagged ? "중요 표시 해제" : "중요 표시"} onClick={() => onToggleFlagged(message)} type="button">
+          <Icon name="star" className={message.flagged ? "h-4 w-4 fill-[#f5b514] text-[#f5b514]" : "h-4 w-4 text-muted"} />
+        </button>
         <button className="ml-2 flex h-9 w-9 items-center justify-center rounded-lg text-ink hover:bg-[#f6f7f8]" aria-label="답장 작성" onClick={onCompose} type="button">
           <Icon name="compose" className="h-4 w-4" />
         </button>

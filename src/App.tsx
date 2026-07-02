@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { accounts as mockAccounts, messages as mockMessages } from "./data";
-import type { Account, ComposeDraft, Message, MockMode } from "./types";
+import type { Account, ComposeDraft, Mailbox, Message, MockMode } from "./types";
 import { ComposePanel } from "./components/ComposePanel";
 import { MessageList } from "./components/MessageList";
 import { MobileInbox } from "./components/MobileInbox";
@@ -106,6 +106,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   const selectedMailbox = selectedAccount.mailboxes
     .flatMap((mailbox) => [mailbox, ...(mailbox.children ?? [])])
     .find((mailbox) => mailbox.id === mailboxId);
+  const flatMailboxes = useMemo(() => flattenMailboxes(selectedAccount.mailboxes), [selectedAccount.mailboxes]);
 
   useEffect(() => {
     localStorage.setItem(LIST_WIDTH_KEY, String(listWidth));
@@ -147,7 +148,11 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     let cancelled = false;
     apiJSON<{ message: ApiMessage }>(`/api/messages/${encodeURIComponent(selectedMessageId)}`)
       .then((body) => {
-        if (!cancelled) setSelectedMessageDetail(normalizeMessage(body.message));
+        if (!cancelled) {
+          const message = normalizeMessage(body.message);
+          setSelectedMessageDetail(message);
+          setApiMessages((current) => current.map((item) => (item.id === message.id ? { ...item, unread: false } : item)));
+        }
       })
       .catch((error) => {
         if (cancelled) return;
@@ -391,6 +396,130 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     });
   }
 
+  function toggleAllChecked() {
+    setCheckedIds((current) => {
+      const visibleIds = visibleMessages.map((message) => message.id);
+      if (visibleIds.length === 0) return current;
+      const allChecked = visibleIds.every((id) => current.has(id));
+      if (allChecked) {
+        const next = new Set(current);
+        visibleIds.forEach((id) => next.delete(id));
+        return next;
+      }
+      return new Set([...current, ...visibleIds]);
+    });
+  }
+
+  async function toggleFlagged(message: Message) {
+    const nextFlagged = !message.flagged;
+    updateMessageFlagged(message.id, nextFlagged);
+    if (!useApi) return;
+    try {
+      await apiJSON(`/api/messages/${encodeURIComponent(message.id)}/flagged`, {
+        method: "PATCH",
+        body: JSON.stringify({ flagged: nextFlagged }),
+      });
+    } catch (error) {
+      updateMessageFlagged(message.id, Boolean(message.flagged));
+      if (isUnauthorized(error)) onSessionExpired?.();
+    }
+  }
+
+  function updateMessageFlagged(id: string, flagged: boolean) {
+    setApiMessages((current) => current.map((item) => (item.id === id ? { ...item, flagged } : item)));
+    setSelectedMessageDetail((current) => (current?.id === id ? { ...current, flagged } : current));
+  }
+
+  async function markUnread(message: Message) {
+    updateMessageUnread(message.id, true);
+    if (!useApi) return;
+    try {
+      await apiJSON(`/api/messages/${encodeURIComponent(message.id)}/seen`, {
+        method: "PATCH",
+        body: JSON.stringify({ seen: false }),
+      });
+    } catch (error) {
+      updateMessageUnread(message.id, false);
+      if (isUnauthorized(error)) onSessionExpired?.();
+      throw error;
+    }
+  }
+
+  function updateMessageUnread(id: string, unread: boolean) {
+    setApiMessages((current) => current.map((item) => (item.id === id ? { ...item, unread } : item)));
+    setSelectedMessageDetail((current) => (current?.id === id ? { ...current, unread } : current));
+  }
+
+  async function moveMessage(message: Message, targetMailboxId: string) {
+    if (!targetMailboxId) throw new Error("missing target mailbox");
+    if (!useApi) {
+      setSelectedMessageId("");
+      return;
+    }
+    const previousMessages = apiMessages;
+    const previousDetail = selectedMessageDetail;
+    setApiMessages((current) => current.filter((item) => item.id !== message.id));
+    setSelectedMessageDetail(undefined);
+    setSelectedMessageId("");
+    try {
+      await apiJSON(`/api/messages/${encodeURIComponent(message.id)}/move`, {
+        method: "POST",
+        body: JSON.stringify({ mailboxId: targetMailboxId }),
+      });
+    } catch (error) {
+      setApiMessages(previousMessages);
+      setSelectedMessageDetail(previousDetail);
+      setSelectedMessageId(message.id);
+      if (isUnauthorized(error)) onSessionExpired?.();
+      throw error;
+    }
+  }
+
+  function moveToKind(message: Message, kind: Mailbox["kind"]) {
+    const mailbox = flatMailboxes.find((item) => item.kind === kind);
+    if (!mailbox) throw new Error(`missing ${kind} mailbox`);
+    return moveMessage(message, mailbox.id);
+  }
+
+  function bulkMoveToKind(kind: Mailbox["kind"]) {
+    const mailbox = flatMailboxes.find((item) => item.kind === kind);
+    if (!mailbox) throw new Error(`missing ${kind} mailbox`);
+    return bulkMoveMessages(mailbox.id);
+  }
+
+  async function bulkMoveMessages(targetMailboxId: string) {
+    const selectedMessages = visibleMessages.filter((message) => checkedIds.has(message.id));
+    if (!selectedMessages.length) return;
+    if (!useApi) {
+      setCheckedIds(new Set());
+      setSelectedMessageId("");
+      return;
+    }
+    const selectedIds = new Set(selectedMessages.map((message) => message.id));
+    const previousMessages = apiMessages;
+    const previousDetail = selectedMessageDetail;
+    const previousSelectedId = selectedMessageId;
+    setApiMessages((current) => current.filter((message) => !selectedIds.has(message.id)));
+    setSelectedMessageDetail((current) => (current && selectedIds.has(current.id) ? undefined : current));
+    setSelectedMessageId((current) => (selectedIds.has(current) ? "" : current));
+    try {
+      await Promise.all(
+        selectedMessages.map((message) =>
+          apiJSON(`/api/messages/${encodeURIComponent(message.id)}/move`, {
+            method: "POST",
+            body: JSON.stringify({ mailboxId: targetMailboxId }),
+          }),
+        ),
+      );
+    } catch (error) {
+      setApiMessages(previousMessages);
+      setSelectedMessageDetail(previousDetail);
+      setSelectedMessageId(previousSelectedId);
+      if (isUnauthorized(error)) onSessionExpired?.();
+      throw error;
+    }
+  }
+
   function startResize(event: React.PointerEvent<HTMLDivElement>) {
     const startX = event.clientX;
     const startWidth = listWidth;
@@ -424,9 +553,13 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         onCompose={openCompose}
         onSelectMessage={setSelectedMessageId}
         onToggleChecked={toggleChecked}
+        onToggleFlagged={toggleFlagged}
+        onClearChecked={() => setCheckedIds(new Set())}
+        onBulkArchive={() => bulkMoveToKind("archive")}
+        onBulkTrash={() => bulkMoveToKind("trash")}
       />
       <div className="hidden h-screen flex-col md:flex">
-        <Toolbar search={search} searchInputRef={searchInputRef} onSearch={handleSearch} onCompose={openCompose} />
+        <Toolbar search={search} searchInputRef={searchInputRef} onSearch={handleSearch} onCompose={openCompose} onRefresh={retry} onSettings={() => window.alert("설정은 아직 준비 중입니다.")} />
         <div className="min-h-0 flex flex-1">
           <Sidebar
             accounts={accounts}
@@ -441,17 +574,34 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
             title={selectedMailbox?.label ?? "받은편지함"}
             unreadCount={visibleMessages.length === 0 && mode === "normal" && !search ? 0 : selectedAccount.unread}
             messages={visibleMessages}
+            mailboxes={flatMailboxes}
             selectedId={selectedMessage?.id}
             checkedIds={checkedIds}
             search={search}
             mode={mode}
             onRetry={retry}
             onSelectMessage={setSelectedMessageId}
+            onToggleAllChecked={toggleAllChecked}
             onToggleChecked={toggleChecked}
+            onToggleFlagged={toggleFlagged}
+            onBulkArchive={() => bulkMoveToKind("archive")}
+            onBulkTrash={() => bulkMoveToKind("trash")}
+            onBulkMove={bulkMoveMessages}
             onClearChecked={() => setCheckedIds(new Set())}
           />
           <div className="hidden w-1 cursor-col-resize bg-white hover:bg-selected md:block" onPointerDown={startResize} aria-label="리스트 폭 조절" />
-          <ReadingPane message={selectedMessage} mode={mode} onRetry={retry} onReply={() => openReply()} />
+          <ReadingPane
+            message={selectedMessage}
+            mode={mode}
+            mailboxes={flatMailboxes}
+            onRetry={retry}
+            onReply={() => openReply()}
+            onToggleFlagged={toggleFlagged}
+            onArchive={(message) => moveToKind(message, "archive")}
+            onTrash={(message) => moveToKind(message, "trash")}
+            onMove={moveMessage}
+            onMarkUnread={markUnread}
+          />
         </div>
       </div>
       {composeOpen ? <ComposePanel accounts={accounts} account={selectedAccount} message={composeMessage} onClose={closeCompose} onSend={useApi ? sendDraft : undefined} /> : null}
@@ -514,4 +664,8 @@ function normalizeMessage(message: ApiMessage): Message {
     ...message,
     body: message.textBody ?? message.body ?? [],
   };
+}
+
+function flattenMailboxes(mailboxes: Mailbox[]): Mailbox[] {
+  return mailboxes.flatMap((mailbox) => [mailbox, ...flattenMailboxes(mailbox.children ?? [])]);
 }

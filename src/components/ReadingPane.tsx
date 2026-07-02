@@ -1,25 +1,38 @@
-import { useEffect, useState } from "react";
-import type { Message, MockMode } from "../types";
+import { useEffect, useState, type ReactNode } from "react";
+import type { Mailbox, Message, MockMode } from "../types";
 import { EmptyState, ErrorState, LoadingState } from "./StateViews";
 import { Icon } from "./Icon";
 
 type ReadingPaneProps = {
   message?: Message;
   mode: MockMode;
+  mailboxes: Mailbox[];
   onRetry: () => void;
   onReply: () => void;
+  onToggleFlagged: (message: Message) => void;
+  onArchive: (message: Message) => Promise<void> | void;
+  onTrash: (message: Message) => Promise<void> | void;
+  onMove: (message: Message, mailboxId: string) => Promise<void> | void;
+  onMarkUnread: (message: Message) => Promise<void> | void;
 };
 
-export function ReadingPane({ message, mode, onRetry, onReply }: ReadingPaneProps) {
+export function ReadingPane({ message, mode, mailboxes, onRetry, onReply, onToggleFlagged, onArchive, onTrash, onMove, onMarkUnread }: ReadingPaneProps) {
   const [recipientsOpen, setRecipientsOpen] = useState(false);
   const [quotedOpen, setQuotedOpen] = useState(false);
   const [showRemoteImages, setShowRemoteImages] = useState(false);
+  const [folderMenuOpen, setFolderMenuOpen] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [actionError, setActionError] = useState("");
   const htmlBody = message?.htmlBody ? revealRemoteImages(message.htmlBody, showRemoteImages) : "";
+  const moveTargets = message ? mailboxes.filter((mailbox) => mailbox.id !== message.mailboxId && mailbox.kind !== "starred") : [];
 
   useEffect(() => {
     setRecipientsOpen(false);
     setQuotedOpen(false);
     setShowRemoteImages(false);
+    setFolderMenuOpen(false);
+    setMoreMenuOpen(false);
+    setActionError("");
   }, [message?.id]);
 
   if (mode === "loading") return <section className="hidden min-w-0 flex-1 bg-white md:block"><LoadingState /></section>;
@@ -37,7 +50,14 @@ export function ReadingPane({ message, mode, onRetry, onReply }: ReadingPaneProp
       <div className="px-[27px] pb-[15px] pt-6">
         <div className="flex items-start gap-4">
           <h1 className="min-w-0 flex-1 text-[18px] font-bold text-ink" data-reading-title>{message.subject}</h1>
-          <Icon name="star" className="h-[18px] w-[18px] shrink-0 fill-[#f5b514] text-[#f5b514]" />
+          <button
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-[#f7f8f9]"
+            aria-label={message.flagged ? "중요 표시 해제" : "중요 표시"}
+            onClick={() => onToggleFlagged(message)}
+            type="button"
+          >
+            <Icon name="star" className={message.flagged ? "h-[18px] w-[18px] fill-[#f5b514] text-[#f5b514]" : "h-[18px] w-[18px] text-muted"} />
+          </button>
         </div>
         <div className="mt-6 flex items-start gap-3">
           <div className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full bg-selected text-sm font-bold text-accent">{message.initials}</div>
@@ -70,12 +90,53 @@ export function ReadingPane({ message, mode, onRetry, onReply }: ReadingPaneProp
           <ActionButton icon="replyAll" label="전체답장" onClick={onReply} />
           <ActionButton icon="forward" label="전달" onClick={onReply} />
           <div className="ml-auto flex gap-[5px] text-[#3a3f45]">
-            <IconButton icon="archive" label="보관" />
-            <IconButton icon="trash" label="삭제" />
-            <IconButton icon="folder" label="이동" />
-            <IconButton icon="more" label="더보기" />
+            <IconButton icon="archive" label="보관" onClick={() => runMessageAction(message, onArchive, setActionError, closeActionMenus)} />
+            <IconButton icon="trash" label="삭제" onClick={() => runMessageAction(message, onTrash, setActionError, closeActionMenus)} />
+            <div className="relative">
+              <IconButton
+                icon="folder"
+                label="이동"
+                onClick={() => {
+                  setActionError("");
+                  setMoreMenuOpen(false);
+                  setFolderMenuOpen((open) => !open);
+                }}
+              />
+              {folderMenuOpen ? (
+                <ActionMenu className="right-0 top-8 w-[180px]">
+                  {moveTargets.length ? (
+                    moveTargets.map((mailbox) => (
+                      <button key={mailbox.id} className="w-full truncate px-3 py-2 text-left hover:bg-[#f6f7f8]" onClick={() => runMoveAction(message, mailbox.id)} type="button">
+                        {mailbox.label}
+                      </button>
+                    ))
+                  ) : (
+                    <div className="px-3 py-2 text-muted">이동할 폴더 없음</div>
+                  )}
+                </ActionMenu>
+              ) : null}
+            </div>
+            <div className="relative">
+              <IconButton
+                icon="more"
+                label="더보기"
+                onClick={() => {
+                  setActionError("");
+                  setFolderMenuOpen(false);
+                  setMoreMenuOpen((open) => !open);
+                }}
+              />
+              {moreMenuOpen ? (
+                <ActionMenu className="right-0 top-8 w-[150px]">
+                  <button className="w-full px-3 py-2 text-left hover:bg-[#f6f7f8]" onClick={() => runMessageAction(message, onMarkUnread, setActionError, closeActionMenus)} type="button">
+                    읽지 않음으로 표시
+                  </button>
+                </ActionMenu>
+              ) : null}
+            </div>
           </div>
         </div>
+        {actionError ? <div className="mt-2 text-right text-[12px] font-medium text-[#b23a30]">{actionError}</div> : null}
       </div>
       <div className="border-t border-line" />
       <div className="px-[27px] py-[18px]">
@@ -154,6 +215,15 @@ export function ReadingPane({ message, mode, onRetry, onReply }: ReadingPaneProp
       </div>
     </section>
   );
+
+  function closeActionMenus() {
+    setFolderMenuOpen(false);
+    setMoreMenuOpen(false);
+  }
+
+  function runMoveAction(target: Message, mailboxId: string) {
+    return runMessageAction(target, (nextMessage) => onMove(nextMessage, mailboxId), setActionError, closeActionMenus);
+  }
 }
 
 function ActionButton({ icon, label, onClick }: { icon: "reply" | "replyAll" | "forward"; label: string; onClick: () => void }) {
@@ -165,12 +235,30 @@ function ActionButton({ icon, label, onClick }: { icon: "reply" | "replyAll" | "
   );
 }
 
-function IconButton({ icon, label }: { icon: "archive" | "trash" | "folder" | "more"; label: string }) {
+function IconButton({ icon, label, onClick }: { icon: "archive" | "trash" | "folder" | "more"; label: string; onClick: () => void }) {
   return (
-    <button className="flex h-[30px] w-[30px] items-center justify-center rounded-md hover:bg-[#f7f8f9]" aria-label={label}>
+    <button className="flex h-[30px] w-[30px] items-center justify-center rounded-md hover:bg-[#f7f8f9]" aria-label={label} onClick={onClick} type="button">
       <Icon name={icon} className="h-[15px] w-[15px]" />
     </button>
   );
+}
+
+function ActionMenu({ children, className }: { children: ReactNode; className: string }) {
+  return (
+    <div className={`absolute z-20 rounded-lg border border-line bg-white py-1 text-[12.5px] text-text shadow-compose ${className}`}>
+      {children}
+    </div>
+  );
+}
+
+async function runMessageAction(message: Message, action: (message: Message) => Promise<void> | void, setActionError: (value: string) => void, onDone: () => void) {
+  setActionError("");
+  try {
+    await action(message);
+    onDone();
+  } catch {
+    setActionError("작업을 완료하지 못했습니다.");
+  }
 }
 
 function revealRemoteImages(html: string, show: boolean) {

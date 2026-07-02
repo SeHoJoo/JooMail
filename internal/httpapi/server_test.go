@@ -46,6 +46,9 @@ func TestProtectedRoutesRejectMissingSession(t *testing.T) {
 		{http.MethodGet, "/api/accounts", ""},
 		{http.MethodGet, "/api/accounts/jooseho@good-night.co.kr/mailboxes/inbox/messages", ""},
 		{http.MethodGet, "/api/messages/inbox.1", ""},
+		{http.MethodPatch, "/api/messages/inbox.1/flagged", `{"flagged":true}`},
+		{http.MethodPatch, "/api/messages/inbox.1/seen", `{"seen":false}`},
+		{http.MethodPost, "/api/messages/inbox.1/move", `{"mailboxId":"mbox_QXJjaGl2ZQ"}`},
 		{http.MethodPost, "/api/send", `{"to":["a@example.com"],"subject":"Hi","textBody":"Hello"}`},
 		{http.MethodPost, "/api/logout", ""},
 	} {
@@ -380,6 +383,170 @@ func TestMessageSummariesParseUnreadAndFlaggedFromIMAPFlags(t *testing.T) {
 	}
 	if !body.Messages[0].Unread || !body.Messages[0].Flagged {
 		t.Fatalf("message flags = unread %v flagged %v, want true/true", body.Messages[0].Unread, body.Messages[0].Flagged)
+	}
+}
+
+func TestMessageDetailMarksUnreadMessageSeen(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Unread message",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"",
+		"Hello from IMAP.",
+	}, "\r\n")
+	var storedUID string
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		onStore: func(mailbox string, uid string, operation string, flag string) string {
+			storedUID = uid
+			return "OK STORE completed"
+		},
+		messages: map[string]map[string]string{"INBOX": {"7": rawMessage}},
+		flags:    map[string]map[string]string{"INBOX": {"7": `()`}},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+	summaryRecorder := requestWithServer(t, server, http.MethodGet, "/api/accounts/jooseho%40good-night.co.kr/mailboxes/inbox/messages", nil, cookie)
+	if summaryRecorder.Code != http.StatusOK {
+		t.Fatalf("summary status = %d, want %d; body = %s", summaryRecorder.Code, http.StatusOK, summaryRecorder.Body.String())
+	}
+	var summaryBody struct {
+		Messages []MessageSummary `json:"messages"`
+	}
+	decode(t, summaryRecorder, &summaryBody)
+	if len(summaryBody.Messages) != 1 || !summaryBody.Messages[0].Unread {
+		t.Fatalf("summaries = %#v, want unread message", summaryBody.Messages)
+	}
+
+	detailRecorder := requestWithServer(t, server, http.MethodGet, "/api/messages/"+summaryBody.Messages[0].ID, nil, cookie)
+
+	if detailRecorder.Code != http.StatusOK {
+		t.Fatalf("detail status = %d, want %d; body = %s", detailRecorder.Code, http.StatusOK, detailRecorder.Body.String())
+	}
+	if storedUID != "7" {
+		t.Fatalf("stored UID = %q, want 7", storedUID)
+	}
+	var detailBody struct {
+		Message Message `json:"message"`
+	}
+	decode(t, detailRecorder, &detailBody)
+	if detailBody.Message.Unread {
+		t.Fatalf("detail unread = true, want false after marking seen")
+	}
+}
+
+func TestMessageFlaggedRouteStoresFlaggedFlag(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Flag me",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"",
+		"Hello from IMAP.",
+	}, "\r\n")
+	var storedMailbox string
+	var storedUID string
+	var storedOperation string
+	var storedFlag string
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		onStore: func(mailbox string, uid string, operation string, flag string) string {
+			storedMailbox = mailbox
+			storedUID = uid
+			storedOperation = operation
+			storedFlag = flag
+			return "OK STORE completed"
+		},
+		messages: map[string]map[string]string{"INBOX": {"7": rawMessage}},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+	messageID := messageID("inbox", "7")
+
+	recorder := requestWithServer(t, server, http.MethodPatch, "/api/messages/"+messageID+"/flagged", strings.NewReader(`{"flagged":true}`), cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if storedMailbox != "INBOX" || storedUID != "7" || storedOperation != "+FLAGS.SILENT" || storedFlag != `(\Flagged)` {
+		t.Fatalf("store = mailbox %q uid %q operation %q flag %q", storedMailbox, storedUID, storedOperation, storedFlag)
+	}
+	var body struct {
+		Flagged bool `json:"flagged"`
+	}
+	decode(t, recorder, &body)
+	if !body.Flagged {
+		t.Fatal("flagged = false, want true")
+	}
+}
+
+func TestMessageFlaggedRouteClearsFlaggedFlag(t *testing.T) {
+	var storedOperation string
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		onStore: func(mailbox string, uid string, operation string, flag string) string {
+			storedOperation = operation
+			return "OK STORE completed"
+		},
+		messages: map[string]map[string]string{"INBOX": {"7": "From: Alice <alice@example.com>\r\nSubject: Flagged\r\n\r\nBody"}},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+	messageID := messageID("inbox", "7")
+
+	recorder := requestWithServer(t, server, http.MethodPatch, "/api/messages/"+messageID+"/flagged", strings.NewReader(`{"flagged":false}`), cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if storedOperation != "-FLAGS.SILENT" {
+		t.Fatalf("operation = %q, want -FLAGS.SILENT", storedOperation)
+	}
+}
+
+func TestMessageSeenRouteClearsSeenFlag(t *testing.T) {
+	var storedOperation string
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		onStore: func(mailbox string, uid string, operation string, flag string) string {
+			storedOperation = operation
+			return "OK STORE completed"
+		},
+		messages: map[string]map[string]string{"INBOX": {"7": "From: Alice <alice@example.com>\r\nSubject: Seen\r\n\r\nBody"}},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+	messageID := messageID("inbox", "7")
+
+	recorder := requestWithServer(t, server, http.MethodPatch, "/api/messages/"+messageID+"/seen", strings.NewReader(`{"seen":false}`), cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if storedOperation != "-FLAGS.SILENT" {
+		t.Fatalf("operation = %q, want -FLAGS.SILENT", storedOperation)
+	}
+}
+
+func TestMessageMoveRouteMovesMessageToTargetMailbox(t *testing.T) {
+	var movedUID string
+	var movedTarget string
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		onMove: func(mailbox string, uid string, target string) string {
+			movedUID = uid
+			movedTarget = target
+			return "OK MOVE completed"
+		},
+		messages: map[string]map[string]string{"INBOX": {"7": "From: Alice <alice@example.com>\r\nSubject: Move\r\n\r\nBody"}},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+	messageID := messageID("inbox", "7")
+
+	recorder := requestWithServer(t, server, http.MethodPost, "/api/messages/"+messageID+"/move", strings.NewReader(`{"mailboxId":"mbox_QXJjaGl2ZQ"}`), cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if movedUID != "7" || movedTarget != "Archive" {
+		t.Fatalf("move = uid %q target %q, want 7/Archive", movedUID, movedTarget)
 	}
 }
 
@@ -767,6 +934,8 @@ type fakeIMAPScript struct {
 	onLogin             func(username, password string) string
 	onSelect            func(mailbox string) string
 	onAppend            func(mailbox string, message string) string
+	onStore             func(mailbox string, uid string, operation string, flag string) string
+	onMove              func(mailbox string, uid string, target string) string
 	mailboxes           []string
 	mailboxLines        []string
 	messages            map[string]map[string]string
@@ -882,7 +1051,31 @@ func handleFakeIMAPConn(conn net.Conn, script fakeIMAPScript) {
 					_, _ = fmt.Fprintf(conn, "* 1 FETCH (UID %s FLAGS %s BODY[] {%d}\r\n%s)\r\n", uid, flags, len(raw), raw)
 				}
 				_, _ = conn.Write([]byte(tag + " OK FETCH completed\r\n"))
+			case "STORE":
+				if len(fields) < 6 {
+					_, _ = conn.Write([]byte(tag + " BAD STORE command failed\r\n"))
+					continue
+				}
+				response := "OK STORE completed"
+				if script.onStore != nil {
+					response = script.onStore(selectedMailbox, fields[3], fields[4], fields[5])
+				}
+				_, _ = conn.Write([]byte(tag + " " + response + "\r\n"))
+			case "MOVE":
+				if len(fields) < 5 {
+					_, _ = conn.Write([]byte(tag + " BAD MOVE command failed\r\n"))
+					continue
+				}
+				response := "OK MOVE completed"
+				if script.onMove != nil {
+					response = script.onMove(selectedMailbox, fields[3], unquoteIMAPTestString(fields[4]))
+				}
+				_, _ = conn.Write([]byte(tag + " " + response + "\r\n"))
+			case "COPY":
+				_, _ = conn.Write([]byte(tag + " OK COPY completed\r\n"))
 			}
+		case "EXPUNGE":
+			_, _ = conn.Write([]byte("* 1 EXPUNGE\r\n" + tag + " OK EXPUNGE completed\r\n"))
 		case "APPEND":
 			if len(fields) < 4 {
 				_, _ = conn.Write([]byte(tag + " BAD APPEND command failed\r\n"))
