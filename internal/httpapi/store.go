@@ -14,22 +14,7 @@ type Store struct {
 }
 
 func MockStore() *Store {
-	mailboxes := []Mailbox{
-		{ID: "inbox", Label: "받은편지함", Kind: "inbox", Unread: 12},
-		{ID: "starred", Label: "중요 표시", Kind: "starred"},
-		{ID: "sent", Label: "보낸편지함", Kind: "sent"},
-		{ID: "drafts", Label: "임시보관함", Kind: "drafts", Unread: 2},
-		{ID: "archive", Label: "보관함", Kind: "archive"},
-		{ID: "spam", Label: "스팸", Kind: "spam", Unread: 3},
-		{ID: "trash", Label: "휴지통", Kind: "trash"},
-		{
-			ID: "work", Label: "Work", Kind: "folder",
-			Children: []Mailbox{
-				{ID: "clients", Label: "Clients", Kind: "folder", Unread: 4},
-				{ID: "internal", Label: "Internal", Kind: "folder"},
-			},
-		},
-	}
+	mailboxes := defaultMailboxes()
 
 	accounts := []Account{
 		{ID: "personal", Email: "jooseho@gmail.com", Label: "개인 계정", Initials: "JS", Unread: 12, Storage: "6.2 / 15 GB", Mailboxes: mailboxes},
@@ -87,8 +72,36 @@ func MockStore() *Store {
 	return &Store{accounts: accounts, messages: messages}
 }
 
+func defaultMailboxes() []Mailbox {
+	return []Mailbox{
+		{ID: "inbox", Label: "받은편지함", Kind: "inbox", Unread: 12},
+		{ID: "starred", Label: "중요 표시", Kind: "starred"},
+		{ID: "sent", Label: "보낸편지함", Kind: "sent"},
+		{ID: "drafts", Label: "임시보관함", Kind: "drafts", Unread: 2},
+		{ID: "archive", Label: "보관함", Kind: "archive"},
+		{ID: "spam", Label: "스팸", Kind: "spam", Unread: 3},
+		{ID: "trash", Label: "휴지통", Kind: "trash"},
+		{
+			ID: "work", Label: "Work", Kind: "folder",
+			Children: []Mailbox{
+				{ID: "clients", Label: "Clients", Kind: "folder", Unread: 4},
+				{ID: "internal", Label: "Internal", Kind: "folder"},
+			},
+		},
+	}
+}
+
 func (s *Store) Accounts() []Account {
 	return slices.Clone(s.accounts)
+}
+
+func (s *Store) AccountByEmail(email string) (Account, bool) {
+	for _, account := range s.accounts {
+		if strings.EqualFold(account.Email, email) {
+			return account, true
+		}
+	}
+	return Account{}, false
 }
 
 func (s *Store) MessageSummaries(accountID, mailboxID, query string) []MessageSummary {

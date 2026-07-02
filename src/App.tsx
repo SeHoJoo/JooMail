@@ -8,6 +8,7 @@ import { ReadingPane } from "./components/ReadingPane";
 import { Sidebar } from "./components/Sidebar";
 import { Toolbar } from "./components/Toolbar";
 import { DevStateSwitcher, type QaState } from "./components/DevStateSwitcher";
+import { LoginPage } from "./components/LoginPage";
 
 const LIST_WIDTH_KEY = "joomail:list-width";
 const QA_STATES: QaState[] = ["normal", "loading", "error", "empty", "empty-reading", "search", "search-empty", "multiselect", "compose"];
@@ -15,6 +16,10 @@ const SEARCH_QA_QUERY = "MIME";
 const SEARCH_EMPTY_QA_QUERY = "qa-no-results-000";
 
 export default function App() {
+  if (import.meta.env.DEV && new URLSearchParams(window.location.search).get("qa") === "login") {
+    return <LoginPage />;
+  }
+
   return <AppShell />;
 }
 

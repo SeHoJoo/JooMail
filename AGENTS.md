@@ -34,7 +34,7 @@ Use the docs for product decisions and feature scope. Use the Figma-derived UI o
 ## Do Not Touch In Current Phase
 - Dovecot/Postfix configuration
 - Real IMAP/SMTP integration
-- Authentication/session systems
+- Authentication/session systems (IMAP LOGIN-based credential verification and HMAC-signed session cookie issuance are in scope; full IMAP mailbox sync and SMTP send integration remain out of scope and continue to use mock message/account data)
 - Database, migrations, persistence
 - Docker, deployment, CI
 - Secrets, credentials, environment files

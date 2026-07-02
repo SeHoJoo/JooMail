@@ -8,12 +8,17 @@ import (
 )
 
 type Server struct {
-	store *Store
-	mux   *http.ServeMux
+	store  *Store
+	config Config
+	mux    *http.ServeMux
 }
 
 func NewServer(store *Store) http.Handler {
-	server := &Server{store: store, mux: http.NewServeMux()}
+	return NewServerWithConfig(store, LoadConfig())
+}
+
+func NewServerWithConfig(store *Store, config Config) http.Handler {
+	server := &Server{store: store, config: config, mux: http.NewServeMux()}
 	server.routes()
 	return server
 }
@@ -24,6 +29,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
+	s.mux.HandleFunc("POST /api/login", s.handleLogin)
 	s.mux.HandleFunc("GET /api/accounts", s.handleAccounts)
 	s.mux.HandleFunc("GET /api/accounts/{accountID}/mailboxes/{mailboxID}/messages", s.handleMessageSummaries)
 	s.mux.HandleFunc("GET /api/messages/{messageID}", s.handleMessage)

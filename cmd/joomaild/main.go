@@ -9,12 +9,16 @@ import (
 )
 
 func main() {
+	config := httpapi.LoadConfig()
 	addr := os.Getenv("JOOMAIL_ADDR")
 	if addr == "" {
 		addr = "127.0.0.1:8080"
 	}
+	if config.SessionSecret == "" {
+		log.Print("warning: JOOMAIL_SESSION_SECRET is empty; /api/login will fail closed until it is set")
+	}
 
-	server := httpapi.NewServer(httpapi.MockStore())
+	server := httpapi.NewServerWithConfig(httpapi.MockStore(), config)
 	if staticDir := os.Getenv("JOOMAIL_STATIC_DIR"); staticDir != "" {
 		server = httpapi.WithStaticFiles(server, staticDir)
 	}

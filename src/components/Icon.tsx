@@ -23,6 +23,9 @@ type IconProps = {
     | "image"
     | "mail"
     | "alert"
+    | "lock"
+    | "eye"
+    | "check"
     | "minimize"
     | "expand"
     | "close"
@@ -59,6 +62,9 @@ const paths: Record<IconProps["name"], string[]> = {
   image: ["M4 5h16v14H4V5Z", "m7 13 3-4 2 2 3-5 3 7", "M8 9h.01"],
   mail: ["M4 6h16v12H4V6Z", "m4 8 8 5 8-5"],
   alert: ["M12 3 21 19H3L12 3Z", "M12 9v4", "M12 17h.01"],
+  lock: ["M5 11h14v9H5V11Z", "M8 11V8a4 4 0 0 1 8 0v3"],
+  eye: ["M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z", "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"],
+  check: ["m5 13 4 4L19 7"],
   minimize: ["M6 12h12"],
   expand: ["M8 3H3v5", "M16 3h5v5", "M8 21H3v-5", "M16 21h5v-5"],
   close: ["M6 6l12 12", "M18 6 6 18"],

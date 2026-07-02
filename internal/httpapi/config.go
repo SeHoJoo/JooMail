@@ -1,0 +1,47 @@
+package httpapi
+
+import (
+	"os"
+	"strings"
+)
+
+type Config struct {
+	Addr           string
+	StaticDir      string
+	IMAPHost       string
+	IMAPPort       string
+	IMAPTLS        bool
+	IMAPUserFormat string
+	SMTPHost       string
+	SMTPPort       string
+	SMTPStartTLS   bool
+	SMTPUserFormat string
+	SessionSecret  string
+}
+
+func LoadConfig() Config {
+	addr := os.Getenv("JOOMAIL_ADDR")
+	if addr == "" {
+		addr = "127.0.0.1:8080"
+	}
+
+	return Config{
+		Addr:           addr,
+		StaticDir:      os.Getenv("JOOMAIL_STATIC_DIR"),
+		IMAPHost:       os.Getenv("JOOMAIL_IMAP_HOST"),
+		IMAPPort:       os.Getenv("JOOMAIL_IMAP_PORT"),
+		IMAPTLS:        envBool("JOOMAIL_IMAP_TLS"),
+		IMAPUserFormat: os.Getenv("JOOMAIL_IMAP_USER_FORMAT"),
+		SMTPHost:       os.Getenv("JOOMAIL_SMTP_HOST"),
+		SMTPPort:       os.Getenv("JOOMAIL_SMTP_PORT"),
+		SMTPStartTLS:   envBool("JOOMAIL_SMTP_STARTTLS"),
+		SMTPUserFormat: os.Getenv("JOOMAIL_SMTP_USER_FORMAT"),
+		// Empty secrets are allowed at startup so deploys do not crash;
+		// handleLogin fails closed until JOOMAIL_SESSION_SECRET is set.
+		SessionSecret: os.Getenv("JOOMAIL_SESSION_SECRET"),
+	}
+}
+
+func envBool(name string) bool {
+	return strings.EqualFold(os.Getenv(name), "true")
+}
