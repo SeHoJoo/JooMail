@@ -24,7 +24,7 @@ export function ReadingPane({ message, mode, onRetry, onReply }: ReadingPaneProp
     <section className="scrollbar-thin hidden min-w-0 flex-1 overflow-y-auto bg-white md:block">
       <div className="px-[27px] pb-[15px] pt-6">
         <div className="flex items-start gap-4">
-          <h1 className="min-w-0 flex-1 text-[18px] font-bold text-ink">{message.subject}</h1>
+          <h1 className="min-w-0 flex-1 text-[18px] font-bold text-ink" data-reading-title>{message.subject}</h1>
           <Icon name="star" className="h-[18px] w-[18px] shrink-0 fill-[#f5b514] text-[#f5b514]" />
         </div>
         <div className="mt-6 flex items-start gap-3">

@@ -25,6 +25,7 @@ export function AppShell() {
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
+  const [replyMessageId, setReplyMessageId] = useState<string | null>(null);
   const [mode, setMode] = useState<MockMode>("normal");
   const [listWidth, setListWidth] = useState(() => Number(localStorage.getItem(LIST_WIDTH_KEY)) || 388);
   const [forceEmptyList, setForceEmptyList] = useState(false);
@@ -47,6 +48,7 @@ export function AppShell() {
   }, [accountId, forceEmptyList, mailboxId, search]);
 
   const selectedMessage = visibleMessages.find((message) => message.id === selectedMessageId);
+  const composeMessage = replyMessageId ? allMessages.find((message) => message.id === replyMessageId) : undefined;
   const selectedMailbox = selectedAccount.mailboxes
     .flatMap((mailbox) => [mailbox, ...(mailbox.children ?? [])])
     .find((mailbox) => mailbox.id === mailboxId);
@@ -77,7 +79,14 @@ export function AppShell() {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && composeOpen) {
+        event.preventDefault();
+        closeCompose();
+        return;
+      }
+
       if (isTypingTarget(event.target)) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
 
       if (event.key === "/") {
         event.preventDefault();
@@ -87,16 +96,11 @@ export function AppShell() {
 
       if (event.key === "c") {
         event.preventDefault();
-        setComposeOpen(true);
+        openCompose();
         return;
       }
 
       if (event.key === "Escape") {
-        if (composeOpen) {
-          event.preventDefault();
-          setComposeOpen(false);
-          return;
-        }
         if (checkedIds.size > 0) {
           event.preventDefault();
           setCheckedIds(new Set());
@@ -109,16 +113,42 @@ export function AppShell() {
         return;
       }
 
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      if (event.key === "ArrowDown" || event.key === "j" || event.key === "ArrowUp" || event.key === "k") {
         if (!visibleMessages.length) return;
         event.preventDefault();
+        const movingDown = event.key === "ArrowDown" || event.key === "j";
         const currentIndex = visibleMessages.findIndex((message) => message.id === selectedMessageId);
-        const fallbackIndex = event.key === "ArrowDown" ? -1 : visibleMessages.length;
-        const nextIndex =
-          event.key === "ArrowDown"
-            ? Math.min(visibleMessages.length - 1, (currentIndex === -1 ? fallbackIndex : currentIndex) + 1)
-            : Math.max(0, (currentIndex === -1 ? fallbackIndex : currentIndex) - 1);
+        const fallbackIndex = movingDown ? -1 : visibleMessages.length;
+        const nextIndex = movingDown
+          ? Math.min(visibleMessages.length - 1, (currentIndex === -1 ? fallbackIndex : currentIndex) + 1)
+          : Math.max(0, (currentIndex === -1 ? fallbackIndex : currentIndex) - 1);
         setSelectedMessageId(visibleMessages[nextIndex].id);
+        return;
+      }
+
+      if (event.key === "Enter") {
+        const focusedMessageId = getFocusedMessageId(event.target);
+        const nextSelectedId = focusedMessageId || selectedMessageId || visibleMessages[0]?.id;
+        if (!nextSelectedId) return;
+        event.preventDefault();
+        setSelectedMessageId(nextSelectedId);
+        return;
+      }
+
+      if (event.key === "x") {
+        const targetId = selectedMessageId || visibleMessages[0]?.id;
+        if (!targetId) return;
+        event.preventDefault();
+        toggleChecked(targetId);
+        return;
+      }
+
+      if (event.key === "r") {
+        const targetId = selectedMessageId || visibleMessages[0]?.id;
+        if (!targetId) return;
+        event.preventDefault();
+        setSelectedMessageId(targetId);
+        openReply(targetId);
       }
     }
 
@@ -139,6 +169,7 @@ export function AppShell() {
     setMailboxId("inbox");
     setSearch("");
     setCheckedIds(new Set());
+    setReplyMessageId(null);
     setComposeOpen(nextState === "compose");
     setSelectedMessageId(firstInboxId);
 
@@ -194,6 +225,22 @@ export function AppShell() {
     setSearch(nextSearch);
   }
 
+  function openCompose() {
+    setReplyMessageId(null);
+    setComposeOpen(true);
+  }
+
+  function openReply(messageId = selectedMessageId) {
+    if (!messageId) return;
+    setReplyMessageId(messageId);
+    setComposeOpen(true);
+  }
+
+  function closeCompose() {
+    setComposeOpen(false);
+    setReplyMessageId(null);
+  }
+
   function toggleChecked(id: string) {
     setCheckedIds((current) => {
       const next = new Set(current);
@@ -224,9 +271,18 @@ export function AppShell() {
 
   return (
     <div className="min-h-screen bg-white text-ink" style={{ "--list-width": `${listWidth}px` } as React.CSSProperties} ref={shellRef}>
-      <MobileInbox account={selectedAccount} messages={visibleMessages.length ? visibleMessages : allMessages.filter((message) => message.accountId === accountId)} onCompose={() => setComposeOpen(true)} onSelectMessage={setSelectedMessageId} />
+      <MobileInbox
+        account={selectedAccount}
+        messages={visibleMessages}
+        selectedId={selectedMessageId}
+        search={search}
+        mode={mode}
+        onRetry={retry}
+        onCompose={openCompose}
+        onSelectMessage={setSelectedMessageId}
+      />
       <div className="hidden h-screen flex-col md:flex">
-        <Toolbar search={search} searchInputRef={searchInputRef} onSearch={handleSearch} onCompose={() => setComposeOpen(true)} />
+        <Toolbar search={search} searchInputRef={searchInputRef} onSearch={handleSearch} onCompose={openCompose} />
         <div className="min-h-0 flex flex-1">
           <Sidebar
             accounts={accounts}
@@ -234,11 +290,11 @@ export function AppShell() {
             selectedMailboxId={mailboxId}
             onSelectAccount={selectAccount}
             onSelectMailbox={selectMailbox}
-            onCompose={() => setComposeOpen(true)}
+            onCompose={openCompose}
           />
           <MessageList
             title={selectedMailbox?.label ?? "받은편지함"}
-            unreadCount={selectedAccount.unread}
+            unreadCount={visibleMessages.length === 0 && mode === "normal" && !search ? 0 : selectedAccount.unread}
             messages={visibleMessages}
             selectedId={selectedMessage?.id}
             checkedIds={checkedIds}
@@ -250,17 +306,22 @@ export function AppShell() {
             onClearChecked={() => setCheckedIds(new Set())}
           />
           <div className="hidden w-1 cursor-col-resize bg-white hover:bg-selected md:block" onPointerDown={startResize} aria-label="리스트 폭 조절" />
-          <ReadingPane message={selectedMessage} mode={mode} onRetry={retry} onReply={() => setComposeOpen(true)} />
+          <ReadingPane message={selectedMessage} mode={mode} onRetry={retry} onReply={() => openReply()} />
         </div>
       </div>
-      {composeOpen ? <ComposePanel account={selectedAccount} message={selectedMessage} onClose={() => setComposeOpen(false)} /> : null}
-      {import.meta.env.DEV ? <DevStateSwitcher states={QA_STATES} onApply={applyQaState} /> : null}
+      {composeOpen ? <ComposePanel account={selectedAccount} message={composeMessage} onClose={closeCompose} /> : null}
+      {import.meta.env.DEV && !composeOpen ? <DevStateSwitcher states={QA_STATES} onApply={applyQaState} /> : null}
     </div>
   );
 }
 
 function isQaState(value: string | null): value is QaState {
   return QA_STATES.includes(value as QaState);
+}
+
+function getFocusedMessageId(target: EventTarget | null) {
+  if (!(target instanceof Element)) return "";
+  return target.closest<HTMLElement>("[data-message-id]")?.dataset.messageId ?? "";
 }
 
 function isTypingTarget(target: EventTarget | null) {

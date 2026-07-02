@@ -16,20 +16,22 @@ export function ComposePanel({ account, message, onClose }: ComposePanelProps) {
   }, []);
 
   return (
-    <section className="fixed inset-0 z-30 flex flex-col bg-white md:inset-auto md:bottom-[15px] md:right-5 md:h-[599px] md:w-[580px] md:rounded-[10px] md:shadow-compose">
-      <div className="flex h-[38px] shrink-0 items-center rounded-t-[10px] bg-[#1e2126] px-4 text-white">
-        <div className="text-[13px] font-medium">새 메일</div>
+    <section className="fixed inset-0 z-40 flex flex-col bg-white md:inset-auto md:bottom-[15px] md:right-5 md:h-[599px] md:w-[580px] md:rounded-[10px] md:shadow-compose" data-compose-panel>
+      <div className="flex h-[38px] shrink-0 items-center bg-[#1e2126] px-4 text-white md:rounded-t-[10px]">
+        <div className="text-[13px] font-medium">{message ? "답장" : "새 메일"}</div>
         <div className="ml-auto flex gap-5">
           <Icon name="minimize" className="hidden h-3.5 w-3.5 md:block" />
           <Icon name="expand" className="hidden h-3.5 w-3.5 md:block" />
-          <button aria-label="작성 닫기" onClick={onClose}>
-            <Icon name="close" className="h-3.5 w-3.5" />
+          <button className="flex h-7 w-7 items-center justify-center rounded-md bg-white/10 hover:bg-white/15 md:bg-transparent md:hover:bg-white/10" aria-label="작성 닫기" onClick={onClose}>
+            <span aria-hidden="true" className="text-[18px] leading-none">
+              ×
+            </span>
           </button>
         </div>
       </div>
       <div className="flex h-[55px] shrink-0 items-center border-b border-line px-4">
         <label className="w-[90px] text-xs text-muted">보내는 사람</label>
-        <button className="flex h-[30px] w-[220px] items-center gap-2 rounded-[7px] border border-line px-1.5 text-[12.5px] text-ink">
+        <button className="flex h-[30px] min-w-0 flex-1 items-center gap-2 rounded-[7px] border border-line px-1.5 text-[12.5px] text-ink md:flex-none md:w-[220px]">
           <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-accent text-[8px] font-bold text-white">{account.initials}</span>
           <span className="truncate">{account.email}</span>
           <Icon name="chevron" className="ml-auto h-3 w-3 text-muted" />
@@ -43,7 +45,7 @@ export function ComposePanel({ account, message, onClose }: ComposePanelProps) {
             <span className="text-xs text-muted">×</span>
           </span>
         ) : null}
-        <span className="ml-3 text-[12.5px] text-muted">이름 또는 이메일 입력...</span>
+        <span className="ml-3 min-w-0 flex-1 truncate text-[12.5px] text-muted">이름 또는 이메일 입력...</span>
         <button className="ml-auto text-xs text-accent">참조/숨은참조</button>
       </div>
       <div className="flex h-[43px] shrink-0 items-center border-b border-line px-4">
@@ -69,8 +71,8 @@ export function ComposePanel({ account, message, onClose }: ComposePanelProps) {
           <Icon name="bold" className="h-[15px] w-[15px]" />
           <Icon name="italic" className="h-[15px] w-[15px]" />
         </div>
-        <div className="ml-auto text-[11px] text-muted">임시저장됨 · 오전 9:47</div>
-        <Icon name="trash" className="ml-5 h-[15px] w-[15px] text-muted" />
+        <div className="ml-auto hidden text-[11px] text-muted sm:block">임시저장됨 · 오전 9:47</div>
+        <Icon name="trash" className="ml-auto h-[15px] w-[15px] text-muted sm:ml-5" />
       </div>
     </section>
   );
