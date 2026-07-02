@@ -19,10 +19,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/text/encoding/japanese"
+	"golang.org/x/text/transform"
 )
 
 func TestHealth(t *testing.T) {
@@ -72,6 +77,27 @@ func TestProtectedRoutesRejectInvalidSession(t *testing.T) {
 
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestProtectedRoutesRejectExpiredSession(t *testing.T) {
+	config := testConfig(t, "127.0.0.1", "1")
+	token, _, err := newSessionToken("jooseho@good-night.co.kr", false, time.Now().Add(-sessionDuration-time.Minute), config.SessionSecret)
+	if err != nil {
+		t.Fatalf("new session token: %v", err)
+	}
+	server := NewServerWithConfig(MockStore(), config)
+	cookie := &http.Cookie{Name: "joomail_session", Value: token}
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts", nil, cookie)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+	}
+	var body map[string]string
+	decode(t, recorder, &body)
+	if body["error"] != "authentication required" {
+		t.Fatalf("error = %q, want generic authentication error", body["error"])
 	}
 }
 
@@ -292,6 +318,9 @@ func TestMessageAttachmentRouteDownloadsDecodedAttachment(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Header().Get("Content-Disposition"), "notes.txt") {
 		t.Fatalf("content disposition = %q, want filename", recorder.Header().Get("Content-Disposition"))
+	}
+	if recorder.Header().Get("Content-Type") != "text/plain" {
+		t.Fatalf("content type = %q, want text/plain", recorder.Header().Get("Content-Type"))
 	}
 }
 
@@ -632,6 +661,168 @@ func TestMessageSummariesFetchFlagsFromIMAP(t *testing.T) {
 	}
 }
 
+func TestMessageSummariesUseServerSideSearchBeforeLimit(t *testing.T) {
+	messages := map[string]string{}
+	for uid := 1; uid <= 60; uid++ {
+		subject := fmt.Sprintf("Regular message %02d", uid)
+		if uid == 1 {
+			subject = "Needle outside newest page"
+		}
+		messages[strconv.Itoa(uid)] = strings.Join([]string{
+			"From: Alice <alice@example.com>",
+			"To: Jooseho <jooseho@good-night.co.kr>",
+			"Subject: " + subject,
+			fmt.Sprintf("Date: Thu, 2 Jul 2026 09:%02d:00 +0900", uid%60),
+			"",
+			"Body.",
+		}, "\r\n")
+	}
+	var criteria string
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		onSearch: func(mailbox string, gotCriteria string) ([]string, string) {
+			criteria = gotCriteria
+			return []string{"1"}, "OK SEARCH completed"
+		},
+		messages: map[string]map[string]string{"INBOX": messages},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts/jooseho%40good-night.co.kr/mailboxes/inbox/messages?q=needle", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if criteria != `TEXT "needle"` {
+		t.Fatalf("search criteria = %q, want server-side TEXT search", criteria)
+	}
+	var body struct {
+		Messages []MessageSummary `json:"messages"`
+	}
+	decode(t, recorder, &body)
+	if len(body.Messages) != 1 || body.Messages[0].Subject != "Needle outside newest page" {
+		t.Fatalf("messages = %#v, want older server-side match", body.Messages)
+	}
+}
+
+func TestSearchCriteriaQuotesSpecialCharactersAndNonASCII(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{name: "empty", query: "   ", want: "ALL"},
+		{name: "spaces quotes parens", query: ` quarterly "roadmap" (final) `, want: `TEXT "quarterly \"roadmap\" (final)"`},
+		{name: "non ascii", query: "한글 검색", want: `CHARSET UTF-8 TEXT "한글 검색"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := searchCriteria(tt.query); got != tt.want {
+				t.Fatalf("searchCriteria(%q) = %q, want %q", tt.query, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMessageSummariesAccountScopeSearchesSelectableMailboxes(t *testing.T) {
+	inboxMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Inbox report",
+		"Date: Thu, 2 Jul 2026 09:00:00 +0900",
+		"",
+		"Report.",
+	}, "\r\n")
+	archiveMessage := strings.Join([]string{
+		"From: Bob <bob@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Archive report",
+		"Date: Thu, 2 Jul 2026 08:00:00 +0900",
+		"",
+		"Report.",
+	}, "\r\n")
+	var searched []string
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin:   func(username, password string) string { return "OK LOGIN completed" },
+		mailboxes: []string{"INBOX", "Archive"},
+		onSearch: func(mailbox string, criteria string) ([]string, string) {
+			searched = append(searched, mailbox+":"+criteria)
+			if mailbox == "INBOX" {
+				return []string{"9"}, "OK SEARCH completed"
+			}
+			if mailbox == "Archive" {
+				return []string{"4"}, "OK SEARCH completed"
+			}
+			return nil, "OK SEARCH completed"
+		},
+		messages: map[string]map[string]string{
+			"INBOX":   {"9": inboxMessage},
+			"Archive": {"4": archiveMessage},
+		},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts/jooseho%40good-night.co.kr/mailboxes/inbox/messages?q=report&scope=account", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if !slices.Contains(searched, `INBOX:TEXT "report"`) || !slices.Contains(searched, `Archive:TEXT "report"`) {
+		t.Fatalf("searched mailboxes = %#v, want INBOX and Archive", searched)
+	}
+	var body struct {
+		Messages []MessageSummary `json:"messages"`
+	}
+	decode(t, recorder, &body)
+	if len(body.Messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(body.Messages))
+	}
+	if body.Messages[0].MailboxID != "inbox" || body.Messages[1].MailboxID != mailboxID("Archive") {
+		t.Fatalf("message mailbox IDs = %#v, want current-account results", []string{body.Messages[0].MailboxID, body.Messages[1].MailboxID})
+	}
+}
+
+func TestAccountsPopulateUnreadCountsFromIMAPStatus(t *testing.T) {
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin:   func(username, password string) string { return "OK LOGIN completed" },
+		mailboxes: []string{"INBOX", "Archive", "Sent"},
+		onStatus: func(mailbox string) (int, string) {
+			switch mailbox {
+			case "INBOX":
+				return 3, "OK STATUS completed"
+			case "Archive":
+				return 2, "OK STATUS completed"
+			default:
+				return 0, "OK STATUS completed"
+			}
+		},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var body struct {
+		Accounts []Account `json:"accounts"`
+	}
+	decode(t, recorder, &body)
+	if len(body.Accounts) != 1 {
+		t.Fatalf("accounts = %#v", body.Accounts)
+	}
+	if body.Accounts[0].Unread != 5 {
+		t.Fatalf("account unread = %d, want 5", body.Accounts[0].Unread)
+	}
+	counts := map[string]int{}
+	for _, mailbox := range flattenSelectableMailboxes(body.Accounts[0].Mailboxes) {
+		counts[mailbox.ID] = mailbox.Unread
+	}
+	if counts["inbox"] != 3 || counts[mailboxID("Archive")] != 2 {
+		t.Fatalf("mailbox unread counts = %#v", counts)
+	}
+}
+
 func TestMessageDetailMarksUnreadMessageSeen(t *testing.T) {
 	rawMessage := strings.Join([]string{
 		"From: Alice <alice@example.com>",
@@ -900,6 +1091,188 @@ func TestParseRawMessageMultipartAlternativeSanitizesHTML(t *testing.T) {
 	}
 	if !message.RemoteImagesBlocked {
 		t.Fatal("remoteImagesBlocked = false, want true for remote image HTML")
+	}
+}
+
+func TestParseRawMessageMultipartAlternativeFallsBackToTextOnly(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Text alternative",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: multipart/alternative; boundary=alt",
+		"",
+		"--alt",
+		"Content-Type: text/plain; charset=utf-8",
+		"Content-Transfer-Encoding: quoted-printable",
+		"",
+		"Plain=20fallback.",
+		"--alt--",
+		"",
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if strings.Join(message.TextBody, "\n") != "Plain fallback." {
+		t.Fatalf("textBody = %#v, want plain fallback", message.TextBody)
+	}
+	if message.HTMLBody != "" {
+		t.Fatalf("htmlBody = %q, want no HTML fallback", message.HTMLBody)
+	}
+}
+
+func TestParseRawMessageMultipartRelatedMapsCIDImages(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Inline image",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: multipart/related; boundary=rel",
+		"",
+		"--rel",
+		"Content-Type: text/html; charset=utf-8",
+		"",
+		`<p>Logo <img src="cid:logo.123@example" onload="alert(1)"></p>`,
+		"",
+		"--rel",
+		"Content-Type: image/png; name=\"logo.png\"",
+		"Content-ID: <logo.123@example>",
+		"Content-Disposition: inline; filename=\"logo.png\"",
+		"Content-Transfer-Encoding: base64",
+		"",
+		"iVBORw0KGgo=",
+		"--rel--",
+		"",
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if !strings.Contains(message.HTMLBody, `src="data:image/png;base64,iVBORw0KGgo="`) {
+		t.Fatalf("htmlBody = %q, want cid image mapped to data URL", message.HTMLBody)
+	}
+	if strings.Contains(strings.ToLower(message.HTMLBody), "onload") || strings.Contains(message.HTMLBody, "cid:") {
+		t.Fatalf("htmlBody = %q, want sanitized resolved image", message.HTMLBody)
+	}
+	if message.RemoteImagesBlocked {
+		t.Fatal("remoteImagesBlocked = true, want cid image not treated as remote image")
+	}
+	if len(message.Attachments) != 0 {
+		t.Fatalf("attachments = %#v, want inline cid image excluded from attachment list", message.Attachments)
+	}
+}
+
+func TestParseRawMessageTransferEncodings(t *testing.T) {
+	tests := []struct {
+		name     string
+		encoding string
+		body     string
+		want     string
+	}{
+		{name: "base64", encoding: "base64", body: "QmFzZTY0IGJvZHku", want: "Base64 body."},
+		{name: "quoted-printable", encoding: "quoted-printable", body: "Quoted=20printable=20body.", want: "Quoted printable body."},
+		{name: "7bit", encoding: "7bit", body: "Seven bit body.", want: "Seven bit body."},
+		{name: "8bit", encoding: "8bit", body: "Cafe \xc3\xa9 body.", want: "Cafe é body."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rawMessage := strings.Join([]string{
+				"From: Alice <alice@example.com>",
+				"To: Jooseho <jooseho@good-night.co.kr>",
+				"Subject: Transfer",
+				"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+				"Content-Type: text/plain; charset=utf-8",
+				"Content-Transfer-Encoding: " + tt.encoding,
+				"",
+				tt.body,
+			}, "\r\n")
+
+			message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+			if err != nil {
+				t.Fatalf("parse raw message: %v", err)
+			}
+			if strings.Join(message.TextBody, "\n") != tt.want {
+				t.Fatalf("textBody = %#v, want %q", message.TextBody, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseRawMessageDecodesISO2022JPCharset(t *testing.T) {
+	body, err := io.ReadAll(transform.NewReader(strings.NewReader("日本語本文"), japanese.ISO2022JP.NewEncoder()))
+	if err != nil {
+		t.Fatalf("encode fixture: %v", err)
+	}
+	raw := bytes.NewBuffer(nil)
+	raw.WriteString(strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: =?ISO-2022-JP?B?GyRCRnxLXDhsGyhC?=",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: text/plain; charset=ISO-2022-JP",
+		"",
+	}, "\r\n"))
+	raw.WriteString("\r\n")
+	raw.Write(body)
+
+	message, err := parseRawMessage("account", "inbox", "8", raw.Bytes())
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if message.Subject != "日本語" {
+		t.Fatalf("subject = %q, want decoded ISO-2022-JP", message.Subject)
+	}
+	if strings.Join(message.TextBody, "\n") != "日本語本文" {
+		t.Fatalf("textBody = %#v, want decoded ISO-2022-JP", message.TextBody)
+	}
+}
+
+func TestParseRawMessageUnsupportedCharsetKeepsVisibleFallback(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Unsupported charset",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: text/plain; charset=x-unknown-mailer",
+		"",
+		"Visible fallback body.",
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if strings.Join(message.TextBody, "\n") != "Visible fallback body." {
+		t.Fatalf("textBody = %#v, want raw visible fallback", message.TextBody)
+	}
+}
+
+func TestParseRawMessageMalformedMultipartKeepsUsableHeaders(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Broken Sender <broken@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Broken multipart",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: multipart/mixed",
+		"",
+		"This body cannot be parsed as multipart.",
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if message.Subject != "Broken multipart" || message.SenderEmail != "broken@example.com" || message.Headers.Date == "" {
+		t.Fatalf("message headers = %#v", message)
 	}
 }
 
@@ -1267,6 +1640,8 @@ func credentialFiles(t *testing.T, dir string) []string {
 type fakeIMAPScript struct {
 	onLogin             func(username, password string) string
 	onSelect            func(mailbox string) string
+	onStatus            func(mailbox string) (int, string)
+	onSearch            func(mailbox string, criteria string) ([]string, string)
 	onAppend            func(mailbox string, message string) string
 	onStore             func(mailbox string, uid string, operation string, flag string) string
 	onMove              func(mailbox string, uid string, target string) string
@@ -1362,13 +1737,20 @@ func handleFakeIMAPConn(conn net.Conn, script fakeIMAPScript) {
 			}
 			switch strings.ToUpper(fields[2]) {
 			case "SEARCH":
-				uids := append([]string{}, script.orderedSearchResult...)
-				if len(uids) == 0 {
-					for uid := range script.messages[selectedMailbox] {
-						uids = append(uids, uid)
+				criteria := strings.TrimSpace(strings.TrimPrefix(line, tag+" UID SEARCH"))
+				status := "OK SEARCH completed"
+				var uids []string
+				if script.onSearch != nil {
+					uids, status = script.onSearch(selectedMailbox, criteria)
+				} else {
+					uids = append([]string{}, script.orderedSearchResult...)
+					if len(uids) == 0 {
+						for uid := range script.messages[selectedMailbox] {
+							uids = append(uids, uid)
+						}
 					}
 				}
-				_, _ = fmt.Fprintf(conn, "* SEARCH %s\r\n%s OK SEARCH completed\r\n", strings.Join(uids, " "), tag)
+				_, _ = fmt.Fprintf(conn, "* SEARCH %s\r\n%s %s\r\n", strings.Join(uids, " "), tag, status)
 			case "FETCH":
 				if script.onFetch != nil {
 					script.onFetch(selectedMailbox, fields[3], strings.Join(fields[4:], " "))
@@ -1412,6 +1794,18 @@ func handleFakeIMAPConn(conn net.Conn, script fakeIMAPScript) {
 			case "COPY":
 				_, _ = conn.Write([]byte(tag + " OK COPY completed\r\n"))
 			}
+		case "STATUS":
+			if len(fields) < 4 {
+				_, _ = conn.Write([]byte(tag + " BAD STATUS command failed\r\n"))
+				continue
+			}
+			mailbox := unquoteIMAPTestString(fields[2])
+			count := 0
+			response := "OK STATUS completed"
+			if script.onStatus != nil {
+				count, response = script.onStatus(mailbox)
+			}
+			_, _ = fmt.Fprintf(conn, "* STATUS %q (UNSEEN %d)\r\n%s %s\r\n", mailbox, count, tag, response)
 		case "EXPUNGE":
 			_, _ = conn.Write([]byte("* 1 EXPUNGE\r\n" + tag + " OK EXPUNGE completed\r\n"))
 		case "APPEND":

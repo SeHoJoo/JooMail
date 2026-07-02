@@ -68,6 +68,8 @@ export type Message = {
 
 export type ComposeMode = "compose" | "reply" | "replyAll" | "forward";
 
+export type SearchScope = "mailbox" | "account";
+
 export type ComposeDraft = {
   fromAccountId: string;
   fromName?: string;

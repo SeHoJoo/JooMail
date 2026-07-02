@@ -12,6 +12,7 @@ import (
 	"mime/multipart"
 	"mime/quotedprintable"
 	"net/mail"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -24,9 +25,19 @@ import (
 	"golang.org/x/text/transform"
 )
 
-const imapCommandTimeout = 10 * time.Second
+const (
+	imapCommandTimeout  = 10 * time.Second
+	messageSummaryLimit = 50
+)
 
 var remoteImageSrcPattern = regexp.MustCompile(`(?i)(<img\b[^>]*?)\s+src\s*=\s*("https?://[^"]*"|'https?://[^']*'|https?://[^\s>]+)`)
+var cidImageSrcPattern = regexp.MustCompile(`(?i)(<img\b[^>]*?)\s+src\s*=\s*("cid:[^"]+"|'cid:[^']+'|cid:[^\s>]+)`)
+var dataImageSrcPattern = regexp.MustCompile(`(?i)^data:image/(gif|jpeg|png|webp);base64,[a-z0-9+/]+=*$`)
+
+type inlineImage struct {
+	mediaType string
+	data      []byte
+}
 
 type deadlineReadWriteCloser interface {
 	io.ReadWriteCloser
@@ -49,6 +60,13 @@ type mailboxListEntry struct {
 	delimiter string
 	noselect  bool
 }
+
+type messageSearchScope string
+
+const (
+	messageSearchScopeMailbox messageSearchScope = "mailbox"
+	messageSearchScopeAccount messageSearchScope = "account"
+)
 
 type AttachmentPayload struct {
 	Name        string
@@ -191,29 +209,61 @@ func (c *imapClient) appendMessage(mailboxName string, raw string) error {
 	return nil
 }
 
-func (c *imapClient) messageSummaries(accountID string, mailboxID string, query string) ([]MessageSummary, error) {
+func (c *imapClient) messageSummaries(accountID string, mailboxID string, query string, scope messageSearchScope) ([]MessageSummary, error) {
 	mailboxName, err := decodeMailboxID(mailboxID)
 	if err != nil {
 		return nil, err
 	}
-	uids, err := c.searchMailbox(mailboxName)
+	query = strings.TrimSpace(query)
+	if scope == messageSearchScopeAccount && query != "" {
+		return c.accountMessageSummaries(accountID, query)
+	}
+	uids, err := c.searchMailbox(mailboxName, query)
 	if err != nil {
 		return nil, err
 	}
-	if len(uids) > 50 {
-		uids = uids[:50]
+	if len(uids) > messageSummaryLimit {
+		uids = uids[:messageSummaryLimit]
 	}
 	messages, err := c.fetchMessages(accountID, mailboxID, mailboxName, uids)
 	if err != nil {
 		return nil, err
 	}
 	sortMessagesNewestFirst(messages)
-	query = strings.ToLower(strings.TrimSpace(query))
 	summaries := make([]MessageSummary, 0, len(messages))
 	for _, message := range messages {
-		if query != "" && !messageMatches(message, query) {
-			continue
+		summaries = append(summaries, message.MessageSummary)
+	}
+	return summaries, nil
+}
+
+func (c *imapClient) accountMessageSummaries(accountID string, query string) ([]MessageSummary, error) {
+	mailboxNames, err := c.listMailboxNames()
+	if err != nil {
+		return nil, err
+	}
+	var messages []Message
+	for _, mailboxName := range mailboxNames {
+		mailboxID := mailboxID(mailboxName)
+		uids, err := c.searchMailbox(mailboxName, query)
+		if err != nil {
+			return nil, err
 		}
+		if len(uids) > messageSummaryLimit {
+			uids = uids[:messageSummaryLimit]
+		}
+		mailboxMessages, err := c.fetchMessages(accountID, mailboxID, mailboxName, uids)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, mailboxMessages...)
+	}
+	sortMessagesNewestFirst(messages)
+	if len(messages) > messageSummaryLimit {
+		messages = messages[:messageSummaryLimit]
+	}
+	summaries := make([]MessageSummary, 0, len(messages))
+	for _, message := range messages {
 		summaries = append(summaries, message.MessageSummary)
 	}
 	return summaries, nil
@@ -399,15 +449,18 @@ func (c *imapClient) copyThenDeleteMessage(uid string, targetMailboxName string)
 	return nil
 }
 
-func (c *imapClient) searchMailbox(mailboxName string) ([]string, error) {
+func (c *imapClient) searchMailbox(mailboxName string, query string) ([]string, error) {
 	if responses, err := c.command("SELECT %s", quoteIMAPString(mailboxName)); err != nil {
 		return nil, err
 	} else if taggedStatus(responses) != "OK" {
 		return nil, errors.New("select failed")
 	}
-	responses, err := c.command("UID SEARCH ALL")
+	responses, err := c.command("UID SEARCH %s", searchCriteria(query))
 	if err != nil {
 		return nil, err
+	}
+	if taggedStatus(responses) != "OK" {
+		return nil, errors.New("search failed")
 	}
 	var uids []int
 	for _, response := range responses {
@@ -427,6 +480,105 @@ func (c *imapClient) searchMailbox(mailboxName string) ([]string, error) {
 		out[i] = strconv.Itoa(uid)
 	}
 	return out, nil
+}
+
+func searchCriteria(query string) string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "ALL"
+	}
+	criterion := "TEXT " + quoteIMAPString(query)
+	if isASCII(query) {
+		return criterion
+	}
+	return "CHARSET UTF-8 " + criterion
+}
+
+func isASCII(value string) bool {
+	for _, r := range value {
+		if r > 127 {
+			return false
+		}
+	}
+	return true
+}
+
+func parseMessageSearchScope(value string) (messageSearchScope, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", string(messageSearchScopeMailbox):
+		return messageSearchScopeMailbox, nil
+	case string(messageSearchScopeAccount):
+		return messageSearchScopeAccount, nil
+	default:
+		return "", errors.New("invalid search scope")
+	}
+}
+
+func (c *imapClient) withUnreadCounts(mailboxes []Mailbox) []Mailbox {
+	counts := make(map[string]int)
+	for _, mailbox := range flattenSelectableMailboxes(mailboxes) {
+		name, err := decodeMailboxID(mailbox.ID)
+		if err != nil {
+			continue
+		}
+		count, err := c.mailboxUnreadCount(name)
+		if err != nil {
+			continue
+		}
+		counts[mailbox.ID] = count
+	}
+	return applyUnreadCounts(mailboxes, counts)
+}
+
+func (c *imapClient) mailboxUnreadCount(mailboxName string) (int, error) {
+	responses, err := c.command("STATUS %s (UNSEEN)", quoteIMAPString(mailboxName))
+	if err != nil {
+		return 0, err
+	}
+	if taggedStatus(responses) != "OK" {
+		return 0, errors.New("status failed")
+	}
+	for _, response := range responses {
+		if count, ok := parseUnreadStatus(response.line); ok {
+			return count, nil
+		}
+	}
+	return 0, nil
+}
+
+func flattenSelectableMailboxes(mailboxes []Mailbox) []Mailbox {
+	var out []Mailbox
+	for _, mailbox := range mailboxes {
+		if mailbox.Selectable {
+			out = append(out, mailbox)
+		}
+		out = append(out, flattenSelectableMailboxes(mailbox.Children)...)
+	}
+	return out
+}
+
+func applyUnreadCounts(mailboxes []Mailbox, counts map[string]int) []Mailbox {
+	out := make([]Mailbox, len(mailboxes))
+	for i, mailbox := range mailboxes {
+		mailbox.Unread = counts[mailbox.ID]
+		mailbox.Children = applyUnreadCounts(mailbox.Children, counts)
+		out[i] = mailbox
+	}
+	return out
+}
+
+func parseUnreadStatus(line string) (int, bool) {
+	upper := strings.ToUpper(line)
+	index := strings.Index(upper, "UNSEEN")
+	if !strings.HasPrefix(upper, "* STATUS ") || index == -1 {
+		return 0, false
+	}
+	fields := strings.Fields(line[index:])
+	if len(fields) < 2 {
+		return 0, false
+	}
+	count, err := strconv.Atoi(strings.Trim(fields[1], "()"))
+	return count, err == nil
 }
 
 func (c *imapClient) fetchMessages(accountID string, mailboxID string, mailboxName string, uids []string) ([]Message, error) {
@@ -945,6 +1097,9 @@ func parseMessageBodyWithCounter(header mail.Header, body io.Reader, counter *in
 	contentType := header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err == nil && strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
+		if strings.EqualFold(mediaType, "multipart/related") {
+			return parseRelatedMessageBody(body, params["boundary"], counter)
+		}
 		reader := multipart.NewReader(body, params["boundary"])
 		var text []string
 		var html []string
@@ -977,6 +1132,86 @@ func parseMessageBodyWithCounter(header mail.Header, body io.Reader, counter *in
 	return splitParagraphs(string(decoded)), "", nil, false
 }
 
+func parseRelatedMessageBody(body io.Reader, boundary string, counter *int) ([]string, string, []Attachment, bool) {
+	reader := multipart.NewReader(body, boundary)
+	var text []string
+	var htmlParts []string
+	var attachments []Attachment
+	inlineImages := map[string]inlineImage{}
+	for {
+		part, err := reader.NextPart()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			break
+		}
+		partText, partHTML, partAttachments := parseRelatedPart(mail.Header(part.Header), part, counter, inlineImages)
+		text = append(text, partText...)
+		if partHTML != "" {
+			htmlParts = append(htmlParts, partHTML)
+		}
+		attachments = append(attachments, partAttachments...)
+	}
+	htmlBody := resolveCIDImageSources(strings.Join(htmlParts, "\n"), inlineImages)
+	htmlBody, remoteImagesBlocked := sanitizeMailHTML(htmlBody)
+	return text, htmlBody, attachments, remoteImagesBlocked
+}
+
+func parseRelatedPart(header mail.Header, body io.Reader, counter *int, inlineImages map[string]inlineImage) ([]string, string, []Attachment) {
+	contentType := header.Get("Content-Type")
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err == nil && strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
+		reader := multipart.NewReader(body, params["boundary"])
+		var text []string
+		var html []string
+		var attachments []Attachment
+		for {
+			part, err := reader.NextPart()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				break
+			}
+			partText, partHTML, partAttachments := parseRelatedPart(mail.Header(part.Header), part, counter, inlineImages)
+			text = append(text, partText...)
+			if partHTML != "" {
+				html = append(html, partHTML)
+			}
+			attachments = append(attachments, partAttachments...)
+		}
+		return text, strings.Join(html, "\n"), attachments
+	}
+	disposition, dispositionParams, _ := mime.ParseMediaType(header.Get("Content-Disposition"))
+	filename := dispositionParams["filename"]
+	if filename == "" {
+		filename = params["name"]
+	}
+	decoded := decodePartBody(header, body)
+	if isInlineCIDImage(header, mediaType, disposition) {
+		inlineImages[normalizeContentID(header.Get("Content-ID"))] = inlineImage{mediaType: mediaType, data: decoded}
+		return nil, "", nil
+	}
+	if strings.EqualFold(disposition, "attachment") || filename != "" {
+		id := fmt.Sprintf("att_%d", *counter)
+		*counter++
+		return nil, "", []Attachment{{
+			ID:   id,
+			Name: decodeHeader(filename),
+			Size: formatBytes(len(decoded)),
+			Type: attachmentType(mediaType),
+		}}
+	}
+	if strings.EqualFold(mediaType, "text/plain") || mediaType == "" {
+		return splitParagraphs(string(decoded)), "", nil
+	}
+	if strings.EqualFold(mediaType, "text/html") {
+		return nil, string(decoded), nil
+	}
+	return nil, "", nil
+}
+
 func parsePart(header mail.Header, body io.Reader, counter *int) ([]string, string, []Attachment, bool) {
 	contentType := header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
@@ -989,6 +1224,9 @@ func parsePart(header mail.Header, body io.Reader, counter *int) ([]string, stri
 		filename = params["name"]
 	}
 	decoded := decodePartBody(header, body)
+	if isInlineCIDImage(header, mediaType, disposition) {
+		return nil, "", nil, false
+	}
 	if strings.EqualFold(disposition, "attachment") || filename != "" {
 		id := fmt.Sprintf("att_%d", *counter)
 		*counter++
@@ -1047,6 +1285,10 @@ func findAttachmentPayload(header mail.Header, body io.Reader, attachmentID stri
 		filename = params["name"]
 	}
 	if !strings.EqualFold(disposition, "attachment") && filename == "" {
+		_, _ = io.Copy(io.Discard, body)
+		return AttachmentPayload{}, ErrNotFound
+	}
+	if isInlineCIDImage(header, mediaType, disposition) {
 		_, _ = io.Copy(io.Discard, body)
 		return AttachmentPayload{}, ErrNotFound
 	}
@@ -1116,6 +1358,8 @@ func sanitizeMailHTML(value string) (string, bool) {
 	policy.AllowElements("a", "b", "blockquote", "br", "code", "div", "em", "hr", "i", "img", "li", "ol", "p", "pre", "span", "strong", "table", "tbody", "td", "th", "thead", "tr", "u", "ul")
 	policy.AllowAttrs("href").OnElements("a")
 	policy.AllowAttrs("alt", "data-joomail-remote-src", "height", "width").OnElements("img")
+	policy.AllowAttrs("src").Matching(dataImageSrcPattern).OnElements("img")
+	policy.AllowDataURIImages()
 	return policy.Sanitize(value), remoteImagesBlocked
 }
 
@@ -1132,6 +1376,44 @@ func blockRemoteImageSources(value string) string {
 		url := strings.Trim(parts[2], `"'`)
 		return parts[1] + ` data-joomail-remote-src="` + html.EscapeString(url) + `"`
 	})
+}
+
+func resolveCIDImageSources(value string, images map[string]inlineImage) string {
+	if len(images) == 0 || value == "" {
+		return value
+	}
+	return cidImageSrcPattern.ReplaceAllStringFunc(value, func(match string) string {
+		parts := cidImageSrcPattern.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+		cid := normalizeContentID(strings.Trim(parts[2], `"'`))
+		image, ok := images[cid]
+		if !ok || !strings.HasPrefix(strings.ToLower(image.mediaType), "image/") {
+			return match
+		}
+		src := "data:" + image.mediaType + ";base64," + base64.StdEncoding.EncodeToString(image.data)
+		return parts[1] + ` src="` + html.EscapeString(src) + `"`
+	})
+}
+
+func isInlineCIDImage(header mail.Header, mediaType string, disposition string) bool {
+	if header.Get("Content-ID") == "" || !strings.HasPrefix(strings.ToLower(mediaType), "image/") {
+		return false
+	}
+	return disposition == "" || strings.EqualFold(disposition, "inline")
+}
+
+func normalizeContentID(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) >= 4 && strings.EqualFold(value[:4], "cid:") {
+		value = value[4:]
+	}
+	value = strings.Trim(value, "<>")
+	if unescaped, err := url.PathUnescape(value); err == nil {
+		value = unescaped
+	}
+	return strings.ToLower(value)
 }
 
 func splitParagraphs(text string) []string {

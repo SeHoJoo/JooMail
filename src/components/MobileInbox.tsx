@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Account, Mailbox, Message, MockMode } from "../types";
+import type { Account, Mailbox, Message, MockMode, SearchScope } from "../types";
 import { Icon } from "./Icon";
 import { highlight } from "./MessageRow";
 import { EmptyState, ErrorState, LoadingState } from "./StateViews";
@@ -12,12 +12,14 @@ type MobileInboxProps = {
   selectedMailboxId: string;
   checkedIds: Set<string>;
   search: string;
+  searchScope: SearchScope;
   mode: MockMode;
   showRemoteImagesByDefault: boolean;
   onRetry: () => void;
   onCompose: () => void;
   onReply: (messageId: string) => void;
   onSearch: (value: string) => void;
+  onSearchScopeChange: (scope: SearchScope) => void;
   onSelectMessage: (id: string) => void;
   onSelectMailbox: (id: string) => void;
   onToggleChecked: (id: string) => void;
@@ -28,7 +30,7 @@ type MobileInboxProps = {
   onLogout?: () => void;
 };
 
-export function MobileInbox({ account, messages, selectedMessage, selectedId, selectedMailboxId, checkedIds, search, mode, showRemoteImagesByDefault, onRetry, onCompose, onReply, onSearch, onSelectMessage, onSelectMailbox, onToggleChecked, onToggleFlagged, onClearChecked, onBulkArchive, onBulkTrash, onLogout }: MobileInboxProps) {
+export function MobileInbox({ account, messages, selectedMessage, selectedId, selectedMailboxId, checkedIds, search, searchScope, mode, showRemoteImagesByDefault, onRetry, onCompose, onReply, onSearch, onSearchScopeChange, onSelectMessage, onSelectMailbox, onToggleChecked, onToggleFlagged, onClearChecked, onBulkArchive, onBulkTrash, onLogout }: MobileInboxProps) {
   const [readingId, setReadingId] = useState("");
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(Boolean(search));
@@ -92,7 +94,19 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, se
           />
         </div>
       ) : null}
-      {search ? <div className="px-6 pt-2 text-[12.5px] text-muted">"{search}"에 대한 결과 {messages.length}건 · 현재 메일함</div> : null}
+      {search ? (
+        <div className="px-6 pt-2 text-[12.5px] text-muted">
+          <div>"{search}"에 대한 결과 {messages.length}건 · {searchScope === "account" ? "현재 계정" : "현재 메일함"}</div>
+          <div className="mt-2 inline-flex rounded-md border border-line bg-white p-0.5">
+            <MobileScopeButton scope="mailbox" active={searchScope === "mailbox"} onSelect={onSearchScopeChange}>
+              현재 메일함
+            </MobileScopeButton>
+            <MobileScopeButton scope="account" active={searchScope === "account"} onSelect={onSearchScopeChange}>
+              현재 계정
+            </MobileScopeButton>
+          </div>
+        </div>
+      ) : null}
       {checkedCount > 0 ? (
         <div className="mt-5 flex h-11 items-center border-y border-line bg-selected px-6 text-accent">
           <input className="h-[15px] w-[15px] accent-accent" aria-label="선택 해제" checked onChange={onClearChecked} type="checkbox" />
@@ -121,7 +135,7 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, se
             <EmptyState title={emptyTitle} description={emptyDescription} />
           </div>
         ) : null}
-        {mode === "normal" ? messages.slice(0, 8).map((message) => {
+        {mode === "normal" ? messages.map((message) => {
           const checked = checkedIds.has(message.id);
           return (
           <button
@@ -169,6 +183,14 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, se
         <Icon name="compose" className="h-[22px] w-[22px]" />
       </button>
     </main>
+  );
+}
+
+function MobileScopeButton({ scope, active, onSelect, children }: { scope: SearchScope; active: boolean; onSelect: (scope: SearchScope) => void; children: string }) {
+  return (
+    <button className={active ? "rounded px-2.5 py-1 font-medium text-accent" : "rounded px-2.5 py-1 text-muted"} onClick={() => onSelect(scope)} type="button">
+      {children}
+    </button>
   );
 }
 

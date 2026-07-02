@@ -44,10 +44,19 @@ func (s *Server) accountForSession(email string, mailboxes []Mailbox) Account {
 		Email:     email,
 		Label:     localPart,
 		Initials:  firstInitial(localPart),
-		Unread:    0,
+		Unread:    totalUnread(mailboxes),
 		Storage:   "",
 		Mailboxes: mailboxes,
 	}
+}
+
+func totalUnread(mailboxes []Mailbox) int {
+	total := 0
+	for _, mailbox := range mailboxes {
+		total += mailbox.Unread
+		total += totalUnread(mailbox.Children)
+	}
+	return total
 }
 
 func equalEmail(a string, b string) bool {

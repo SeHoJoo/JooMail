@@ -27,6 +27,8 @@ export function ReadingPane({ message, mode, mailboxes, showRemoteImagesByDefaul
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [actionError, setActionError] = useState("");
   const htmlBody = message?.htmlBody ? revealRemoteImages(message.htmlBody, showRemoteImages) : "";
+  const bodySections = splitQuotedBody(message?.body ?? []);
+  const attachmentTotal = attachmentTotalSize(message?.attachments ?? []);
   const moveTargets = message ? mailboxes.filter((mailbox) => mailbox.id !== message.mailboxId && mailbox.kind !== "starred" && mailbox.selectable !== false) : [];
 
   useEffect(() => {
@@ -163,7 +165,7 @@ export function ReadingPane({ message, mode, mailboxes, showRemoteImagesByDefaul
           <article className="max-w-[750px] text-sm leading-[1.5] text-text [&_a]:text-accent [&_a]:underline [&_img:not([src])]:hidden [&_img]:max-w-full [&_li]:mb-1 [&_ol]:mb-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-5 [&_ul]:mb-5 [&_ul]:list-disc [&_ul]:pl-5" dangerouslySetInnerHTML={{ __html: htmlBody }} />
         ) : (
           <article className="max-w-[750px] whitespace-pre-line text-sm leading-[1.5] text-text">
-            {message.body.slice(0, 3).map((paragraph) => (
+            {bodySections.visible.slice(0, 3).map((paragraph) => (
               <p key={paragraph} className="mb-5">
                 {paragraph}
               </p>
@@ -175,7 +177,7 @@ export function ReadingPane({ message, mode, mailboxes, showRemoteImagesByDefaul
                 ))}
               </ul>
             ) : null}
-            {message.body.slice(3).map((paragraph) => (
+            {bodySections.visible.slice(3).map((paragraph) => (
               <p key={paragraph} className="mb-5">
                 {paragraph}
               </p>
@@ -189,7 +191,7 @@ export function ReadingPane({ message, mode, mailboxes, showRemoteImagesByDefaul
         )}
         {message.attachments?.length ? (
           <div className="mt-8">
-            <div className="mb-3 text-xs text-muted">첨부파일 {message.attachments.length}개 · 3.1 MB</div>
+            <div className="mb-3 text-xs text-muted">첨부파일 {message.attachments.length}개{attachmentTotal ? ` · ${attachmentTotal}` : ""}</div>
             <div className="flex flex-wrap gap-3">
               {message.attachments.map((attachment) => (
                 <a key={attachment.id ?? attachment.name} className="flex h-[52px] w-[220px] items-center rounded-lg border border-line bg-white px-2 hover:bg-[#f7f8f9]" href={attachment.id ? `/api/messages/${encodeURIComponent(message.id)}/attachments/${encodeURIComponent(attachment.id)}` : undefined} download={attachment.name}>
@@ -206,15 +208,22 @@ export function ReadingPane({ message, mode, mailboxes, showRemoteImagesByDefaul
             </div>
           </div>
         ) : null}
-        <button className="mt-5 flex items-center gap-2 rounded-md bg-[#f7f8f9] px-3 py-1.5 text-xs text-muted hover:text-text" onClick={() => setQuotedOpen((open) => !open)} type="button">
-          <Icon name="more" className="h-3.5 w-3.5" />
-          인용된 이전 대화 {quotedOpen ? "접기" : "보기"}
-        </button>
-        {quotedOpen ? (
-          <div className="mt-3 max-w-[750px] rounded-lg border border-line bg-[#f7f8f9] px-4 py-3 text-[12.5px] leading-5 text-muted">
-            <p className="mb-2">On 2026년 7월 1일, {message.sender} wrote:</p>
-            <p>이전 대화 내용은 기본 접힘 상태로 유지됩니다. 이 영역은 목업 UI에서만 펼쳐집니다.</p>
-          </div>
+        {bodySections.quoted.length ? (
+          <>
+            <button className="mt-5 flex items-center gap-2 rounded-md bg-[#f7f8f9] px-3 py-1.5 text-xs text-muted hover:text-text" onClick={() => setQuotedOpen((open) => !open)} type="button">
+              <Icon name="more" className="h-3.5 w-3.5" />
+              인용된 이전 대화 {quotedOpen ? "접기" : "보기"}
+            </button>
+            {quotedOpen ? (
+              <div className="mt-3 max-w-[750px] rounded-lg border border-line bg-[#f7f8f9] px-4 py-3 text-[12.5px] leading-5 text-muted">
+                {bodySections.quoted.map((paragraph) => (
+                  <p key={paragraph} className="mb-2 last:mb-0">
+                    {paragraph.replace(/^>\s?/, "")}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+          </>
         ) : null}
       </div>
     </section>
@@ -272,4 +281,51 @@ function revealRemoteImages(html: string, show: boolean) {
 
 function formatHeaderRecipients(values: string[] | undefined) {
   return (values ?? []).map((value) => value.trim()).filter(Boolean).join(", ");
+}
+
+function splitQuotedBody(body: string[]) {
+  const visible: string[] = [];
+  const quoted: string[] = [];
+  let inQuote = false;
+  for (const paragraph of body) {
+    const trimmed = paragraph.trim();
+    if (isQuoteStart(trimmed)) inQuote = true;
+    if (inQuote) {
+      quoted.push(paragraph);
+    } else {
+      visible.push(paragraph);
+    }
+  }
+  return { visible: visible.length || quoted.length ? visible : body, quoted };
+}
+
+function isQuoteStart(value: string) {
+  return value.startsWith(">") || (/^on .+ wrote:$/i.test(value) && value.length < 240);
+}
+
+function attachmentTotalSize(attachments: { size?: string }[]) {
+  if (!attachments.length) return "";
+  let total = 0;
+  for (const attachment of attachments) {
+    const bytes = parseAttachmentSize(attachment.size ?? "");
+    if (bytes === null) return "";
+    total += bytes;
+  }
+  return formatBytes(total);
+}
+
+function parseAttachmentSize(value: string) {
+  const match = value.trim().match(/^([\d.]+)\s*(B|KB|MB|GB)$/i);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount)) return null;
+  const unit = match[2].toUpperCase();
+  const scale = unit === "GB" ? 1024 ** 3 : unit === "MB" ? 1024 ** 2 : unit === "KB" ? 1024 : 1;
+  return amount * scale;
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`;
+  return `${Math.round(bytes / 1024 / 102.4) / 10} MB`;
 }

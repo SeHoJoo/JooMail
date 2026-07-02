@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Mailbox, Message, MockMode } from "../types";
+import type { Mailbox, Message, MockMode, SearchScope } from "../types";
 import { Icon } from "./Icon";
 import { EmptyState, ErrorState, LoadingState } from "./StateViews";
 import { MessageRow } from "./MessageRow";
@@ -12,8 +12,10 @@ type MessageListProps = {
   selectedId?: string;
   checkedIds: Set<string>;
   search: string;
+  searchScope: SearchScope;
   mode: MockMode;
   onRetry: () => void;
+  onSearchScopeChange: (scope: SearchScope) => void;
   onSelectMessage: (id: string) => void;
   onToggleAllChecked: () => void;
   onToggleChecked: (id: string) => void;
@@ -24,7 +26,7 @@ type MessageListProps = {
   onClearChecked: () => void;
 };
 
-export function MessageList({ title, unreadCount, messages, mailboxes, selectedId, checkedIds, search, mode, onRetry, onSelectMessage, onToggleAllChecked, onToggleChecked, onToggleFlagged, onBulkArchive, onBulkTrash, onBulkMove, onClearChecked }: MessageListProps) {
+export function MessageList({ title, unreadCount, messages, mailboxes, selectedId, checkedIds, search, searchScope, mode, onRetry, onSearchScopeChange, onSelectMessage, onToggleAllChecked, onToggleChecked, onToggleFlagged, onBulkArchive, onBulkTrash, onBulkMove, onClearChecked }: MessageListProps) {
   const checkedCount = checkedIds.size;
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -79,15 +81,23 @@ export function MessageList({ title, unreadCount, messages, mailboxes, selectedI
         <div className="flex h-11 items-center border-b border-line px-2">
           <input className="h-[15px] w-[15px] accent-accent" checked={allVisibleChecked} disabled={!messages.length} onChange={onToggleAllChecked} type="checkbox" aria-label={allVisibleChecked ? "전체 선택 해제" : "전체 선택"} />
           <div className="ml-3 truncate text-[13.5px] font-bold text-ink">{search ? `'${search}' 결과 ${messages.length}건` : title}</div>
-          <div className="ml-auto text-[11.5px] text-muted">{search ? "현재 메일함" : `안읽음 ${unreadCount}`}</div>
+          <div className="ml-auto text-[11.5px] text-muted">{search ? searchScopeLabel(searchScope) : `안읽음 ${unreadCount}`}</div>
           <button className="ml-4 text-muted" aria-label="메일 목록 새로고침" onClick={onRetry} type="button">
             <Icon name="refresh" className="h-[15px] w-[15px]" />
           </button>
         </div>
       )}
       {search ? (
-        <div className="border-b border-line px-4 py-2 text-[11.5px] text-muted">
-          검색 범위: 현재 메일함
+        <div className="flex items-center border-b border-line px-4 py-2 text-[11.5px] text-muted">
+          <span>검색 범위</span>
+          <div className="ml-auto flex rounded-md border border-line bg-white p-0.5">
+            <ScopeButton scope="mailbox" active={searchScope === "mailbox"} onSelect={onSearchScopeChange}>
+              현재 메일함
+            </ScopeButton>
+            <ScopeButton scope="account" active={searchScope === "account"} onSelect={onSearchScopeChange}>
+              현재 계정
+            </ScopeButton>
+          </div>
         </div>
       ) : null}
       <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
@@ -113,6 +123,18 @@ export function MessageList({ title, unreadCount, messages, mailboxes, selectedI
       </div>
     </section>
   );
+}
+
+function ScopeButton({ scope, active, onSelect, children }: { scope: SearchScope; active: boolean; onSelect: (scope: SearchScope) => void; children: string }) {
+  return (
+    <button className={active ? "rounded px-2 py-1 font-medium text-accent" : "rounded px-2 py-1 text-muted hover:text-text"} onClick={() => onSelect(scope)} type="button">
+      {children}
+    </button>
+  );
+}
+
+function searchScopeLabel(scope: SearchScope) {
+  return scope === "account" ? "현재 계정" : "현재 메일함";
 }
 
 async function runBulkAction(action: () => Promise<void> | void, setActionError: (value: string) => void, onDone: () => void) {
