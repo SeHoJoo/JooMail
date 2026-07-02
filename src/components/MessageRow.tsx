@@ -39,11 +39,11 @@ export function MessageRow({ message, selected, checked, search, onSelect, onTog
       onFocus={onSelect}
     >
       {selected ? <span className="absolute left-0 top-0 h-full w-0.5 bg-accent" /> : null}
-      <span className="absolute left-2 top-[29px] h-1.5 w-1.5 rounded-full bg-accent opacity-0 data-[show=true]:opacity-100" data-show={message.unread} />
+      <span className="absolute left-[29px] top-[29px] h-1.5 w-1.5 rounded-full bg-accent opacity-0 data-[show=true]:opacity-100" data-show={message.unread} />
       <input
         aria-label={`${message.sender} 선택`}
         className={[
-          "absolute left-[19px] top-[24px] h-[15px] w-[15px] accent-accent group-hover:block",
+          "absolute left-2 top-[24px] h-[15px] w-[15px] accent-accent group-hover:block",
           checked ? "block" : "hidden",
         ].join(" ")}
         checked={checked}
