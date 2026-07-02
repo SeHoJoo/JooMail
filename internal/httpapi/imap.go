@@ -75,11 +75,26 @@ func (c *imapClient) login(username string, password string) error {
 }
 
 func (c *imapClient) listMailboxes() ([]Mailbox, error) {
+	names, err := c.listMailboxNames()
+	if err != nil {
+		return nil, err
+	}
+	mailboxes := make([]Mailbox, 0, len(names))
+	for _, name := range names {
+		mailboxes = append(mailboxes, mailboxFromIMAPName(name))
+	}
+	if len(mailboxes) == 0 {
+		mailboxes = append(mailboxes, mailboxFromIMAPName("INBOX"))
+	}
+	return mailboxes, nil
+}
+
+func (c *imapClient) listMailboxNames() ([]string, error) {
 	responses, err := c.command(`LIST "" "*"`)
 	if err != nil {
 		return nil, err
 	}
-	var mailboxes []Mailbox
+	var names []string
 	for _, response := range responses {
 		if !strings.HasPrefix(response.line, "* LIST ") {
 			continue
@@ -91,12 +106,60 @@ func (c *imapClient) listMailboxes() ([]Mailbox, error) {
 		if skipMailboxListResponse(name, noselect) {
 			continue
 		}
-		mailboxes = append(mailboxes, mailboxFromIMAPName(name))
+		names = append(names, name)
 	}
-	if len(mailboxes) == 0 {
-		mailboxes = append(mailboxes, mailboxFromIMAPName("INBOX"))
+	return names, nil
+}
+
+func (c *imapClient) appendSentMessage(raw string) error {
+	names, err := c.listMailboxNames()
+	if err != nil {
+		return err
 	}
-	return mailboxes, nil
+	mailboxName := sentMailboxName(names)
+	if mailboxName == "" {
+		mailboxName = "Sent"
+	}
+	return c.appendMessage(mailboxName, raw)
+}
+
+func (c *imapClient) appendMessage(mailboxName string, raw string) error {
+	c.next++
+	tag := fmt.Sprintf("A%03d", c.next)
+	if err := c.conn.SetDeadline(time.Now().Add(imapCommandTimeout)); err != nil {
+		return err
+	}
+	literal := []byte(raw)
+	if _, err := fmt.Fprintf(c.conn, "%s APPEND %s (\\Seen) {%d}\r\n", tag, quoteIMAPString(mailboxName), len(literal)); err != nil {
+		return err
+	}
+	for {
+		line, err := c.reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if strings.HasPrefix(line, "+") {
+			break
+		}
+		if strings.HasPrefix(line, tag+" ") || strings.HasPrefix(line, tag+"\t") {
+			return errors.New("append failed")
+		}
+	}
+	if _, err := c.conn.Write(literal); err != nil {
+		return err
+	}
+	if _, err := c.conn.Write([]byte("\r\n")); err != nil {
+		return err
+	}
+	responses, err := c.readUntilTag(tag)
+	if err != nil {
+		return err
+	}
+	if taggedStatus(responses) != "OK" {
+		return errors.New("append failed")
+	}
+	return nil
 }
 
 func (c *imapClient) messageSummaries(accountID string, mailboxID string, query string) ([]MessageSummary, error) {
@@ -238,6 +301,29 @@ func (c *imapClient) command(format string, args ...any) ([]imapResponse, error)
 	}
 }
 
+func (c *imapClient) readUntilTag(tag string) ([]imapResponse, error) {
+	var responses []imapResponse
+	for {
+		line, err := c.reader.ReadString('\n')
+		if err != nil {
+			return responses, err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		response := imapResponse{line: line}
+		if size, ok := literalSize(line); ok {
+			literal := make([]byte, size)
+			if _, err := io.ReadFull(c.reader, literal); err != nil {
+				return responses, err
+			}
+			response.literal = literal
+		}
+		responses = append(responses, response)
+		if strings.HasPrefix(line, tag+" ") || strings.HasPrefix(line, tag+"\t") {
+			return responses, nil
+		}
+	}
+}
+
 func taggedStatus(responses []imapResponse) string {
 	if len(responses) == 0 {
 		return ""
@@ -279,6 +365,24 @@ func responseFlagged(line string) bool {
 
 func skipMailboxListResponse(name string, noselect bool) bool {
 	return noselect || name == "."
+}
+
+func sentMailboxName(names []string) string {
+	for _, name := range names {
+		if isSentMailboxName(name) {
+			return name
+		}
+	}
+	return ""
+}
+
+func isSentMailboxName(name string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	switch normalized {
+	case "sent", "sent mail", "sent messages":
+		return true
+	}
+	return strings.HasSuffix(normalized, "/sent") || strings.HasSuffix(normalized, ".sent")
 }
 
 func parseListMailboxName(line string) (string, bool) {

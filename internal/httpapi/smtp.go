@@ -51,6 +51,7 @@ func (s *Server) sendMail(credential storedCredential, request sendRequest) erro
 	if s.config.SMTPHost == "" || s.config.SMTPPort == "" || s.config.SMTPUserFormat != "localpart" {
 		return errors.New("smtp unavailable")
 	}
+	message := formatOutgoingMessage(credential.Email, request)
 	recipients := append([]string{}, request.To...)
 	recipients = append(recipients, request.Cc...)
 	recipients = append(recipients, request.Bcc...)
@@ -105,14 +106,26 @@ func (s *Server) sendMail(credential storedCredential, request sendRequest) erro
 	if err != nil {
 		return err
 	}
-	if _, err := writer.Write([]byte(formatOutgoingMessage(credential.Email, request))); err != nil {
+	if _, err := writer.Write([]byte(message)); err != nil {
 		_ = writer.Close()
 		return err
 	}
 	if err := writer.Close(); err != nil {
 		return err
 	}
-	return client.Quit()
+	if err := client.Quit(); err != nil {
+		return err
+	}
+	return s.appendSentMessage(credential, message)
+}
+
+func (s *Server) appendSentMessage(credential storedCredential, message string) error {
+	client, err := openIMAPSession(s.config, credential)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return client.appendSentMessage(message)
 }
 
 func smtpImplicitTLS(config Config) bool {

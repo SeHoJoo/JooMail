@@ -437,12 +437,20 @@ func TestIMAPProtocolErrorsReturnGenericResponse(t *testing.T) {
 }
 
 func TestSendUsesStoredCredentialForSMTP(t *testing.T) {
+	var appendedMailbox string
+	var appendedMessage string
 	imapHost, imapPort := startFakeIMAPServer(t, fakeIMAPScript{
+		mailboxes: []string{"INBOX", "Sent"},
 		onLogin: func(username, password string) string {
 			if username != "jooseho" || password != "mail-password" {
 				t.Fatalf("imap login credentials = %q/%q", username, password)
 			}
 			return "OK LOGIN completed"
+		},
+		onAppend: func(mailbox string, message string) string {
+			appendedMailbox = mailbox
+			appendedMessage = message
+			return "OK APPEND completed"
 		},
 	})
 	var smtpAuthLine string
@@ -465,6 +473,12 @@ func TestSendUsesStoredCredentialForSMTP(t *testing.T) {
 	}
 	if !strings.Contains(smtpData, "Subject: Hello") || !strings.Contains(smtpData, "Plain message") {
 		t.Fatalf("smtp data = %q", smtpData)
+	}
+	if appendedMailbox != "Sent" {
+		t.Fatalf("appended mailbox = %q, want Sent", appendedMailbox)
+	}
+	if normalizeMailLineEndings(appendedMessage) != normalizeMailLineEndings(smtpData) {
+		t.Fatalf("appended message = %q, want SMTP data %q", appendedMessage, smtpData)
 	}
 }
 
@@ -679,6 +693,7 @@ func credentialFiles(t *testing.T, dir string) []string {
 type fakeIMAPScript struct {
 	onLogin      func(username, password string) string
 	onSelect     func(mailbox string) string
+	onAppend     func(mailbox string, message string) string
 	mailboxes    []string
 	mailboxLines []string
 	messages     map[string]map[string]string
@@ -788,6 +803,28 @@ func handleFakeIMAPConn(conn net.Conn, script fakeIMAPScript) {
 				}
 				_, _ = conn.Write([]byte(tag + " OK FETCH completed\r\n"))
 			}
+		case "APPEND":
+			if len(fields) < 4 {
+				_, _ = conn.Write([]byte(tag + " BAD APPEND command failed\r\n"))
+				continue
+			}
+			mailbox := unquoteIMAPTestString(fields[2])
+			size, ok := literalSize(line)
+			if !ok {
+				_, _ = conn.Write([]byte(tag + " BAD APPEND missing literal\r\n"))
+				continue
+			}
+			_, _ = conn.Write([]byte("+ Ready for literal\r\n"))
+			literal := make([]byte, size)
+			if _, err := io.ReadFull(reader, literal); err != nil {
+				return
+			}
+			_, _ = reader.ReadString('\n')
+			response := "OK APPEND completed"
+			if script.onAppend != nil {
+				response = script.onAppend(mailbox, string(literal))
+			}
+			_, _ = conn.Write([]byte(tag + " " + response + "\r\n"))
 		case "LOGOUT":
 			_, _ = conn.Write([]byte("* BYE logging out\r\n" + tag + " OK LOGOUT completed\r\n"))
 			return
@@ -945,4 +982,9 @@ func decodeSMTPPlainAuth(t *testing.T, line string) string {
 		t.Fatalf("decode smtp auth: %v", err)
 	}
 	return string(decoded)
+}
+
+func normalizeMailLineEndings(value string) string {
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	return strings.TrimSpace(value)
 }

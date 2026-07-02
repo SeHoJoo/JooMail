@@ -365,6 +365,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         method: "POST",
         body: JSON.stringify(draft),
       });
+      setReloadToken((value) => value + 1);
     } catch (error) {
       if (isUnauthorized(error)) onSessionExpired?.();
       throw error;
