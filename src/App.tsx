@@ -16,8 +16,19 @@ const SEARCH_QA_QUERY = "MIME";
 const SEARCH_EMPTY_QA_QUERY = "qa-no-results-000";
 
 export default function App() {
-  if (import.meta.env.DEV && new URLSearchParams(window.location.search).get("qa") === "login") {
-    return <LoginPage />;
+  const qaParam = new URLSearchParams(window.location.search).get("qa");
+  if (import.meta.env.DEV && qaParam && qaParam !== "login") {
+    return <AppShell />;
+  }
+
+  return <LoginGate />;
+}
+
+function LoginGate() {
+  const [loginComplete, setLoginComplete] = useState(false);
+
+  if (!loginComplete) {
+    return <LoginPage onLoginSuccess={() => setLoginComplete(true)} />;
   }
 
   return <AppShell />;
