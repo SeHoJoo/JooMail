@@ -14,6 +14,10 @@ import (
 
 const smtpCommandTimeout = 10 * time.Second
 
+var newSMTPTLSConfig = func(host string) *tls.Config {
+	return &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+}
+
 type sendRequest struct {
 	To       []string `json:"to"`
 	Cc       []string `json:"cc"`
@@ -58,7 +62,14 @@ func (s *Server) sendMail(credential storedCredential, request sendRequest) erro
 	}
 
 	address := net.JoinHostPort(s.config.SMTPHost, s.config.SMTPPort)
-	conn, err := (&net.Dialer{Timeout: smtpCommandTimeout}).Dial("tcp", address)
+	dialer := &net.Dialer{Timeout: smtpCommandTimeout}
+	var conn net.Conn
+	var err error
+	if smtpImplicitTLS(s.config) {
+		conn, err = tls.DialWithDialer(dialer, "tcp", address, newSMTPTLSConfig(s.config.SMTPHost))
+	} else {
+		conn, err = dialer.Dial("tcp", address)
+	}
 	if err != nil {
 		return err
 	}
@@ -73,8 +84,8 @@ func (s *Server) sendMail(credential storedCredential, request sendRequest) erro
 	if err := client.Hello("localhost"); err != nil {
 		return err
 	}
-	if s.config.SMTPStartTLS {
-		if err := client.StartTLS(&tls.Config{ServerName: s.config.SMTPHost, MinVersion: tls.VersionTLS12}); err != nil {
+	if s.config.SMTPStartTLS && !smtpImplicitTLS(s.config) {
+		if err := client.StartTLS(newSMTPTLSConfig(s.config.SMTPHost)); err != nil {
 			return err
 		}
 	}
@@ -102,6 +113,10 @@ func (s *Server) sendMail(credential storedCredential, request sendRequest) erro
 		return err
 	}
 	return client.Quit()
+}
+
+func smtpImplicitTLS(config Config) bool {
+	return config.SMTPTLS || config.SMTPPort == "465"
 }
 
 func formatOutgoingMessage(from string, request sendRequest) string {

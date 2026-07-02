@@ -73,6 +73,7 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
               className="min-w-0 flex-1 border-0 bg-transparent text-[13.5px] text-ink outline-none placeholder:text-muted focus:outline-none"
               type="email"
               autoComplete="email"
+              placeholder="you@good-night.co.kr"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
             />
@@ -95,6 +96,7 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
               className="min-w-0 flex-1 border-0 bg-transparent text-[13.5px] text-ink outline-none placeholder:text-muted focus:outline-none"
               type={showPassword ? "text" : "password"}
               autoComplete="current-password"
+              placeholder="메일 비밀번호"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
             />

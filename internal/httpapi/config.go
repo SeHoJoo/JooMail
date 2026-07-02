@@ -14,6 +14,7 @@ type Config struct {
 	IMAPUserFormat string
 	SMTPHost       string
 	SMTPPort       string
+	SMTPTLS        bool
 	SMTPStartTLS   bool
 	SMTPUserFormat string
 	SessionSecret  string
@@ -36,6 +37,7 @@ func LoadConfig() Config {
 		IMAPUserFormat: os.Getenv("JOOMAIL_IMAP_USER_FORMAT"),
 		SMTPHost:       os.Getenv("JOOMAIL_SMTP_HOST"),
 		SMTPPort:       os.Getenv("JOOMAIL_SMTP_PORT"),
+		SMTPTLS:        envBool("JOOMAIL_SMTP_TLS"),
 		SMTPStartTLS:   envBool("JOOMAIL_SMTP_STARTTLS"),
 		SMTPUserFormat: os.Getenv("JOOMAIL_SMTP_USER_FORMAT"),
 		// Empty secrets are allowed at startup so deploys do not crash;

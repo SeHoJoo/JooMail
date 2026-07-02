@@ -84,8 +84,11 @@ func (c *imapClient) listMailboxes() ([]Mailbox, error) {
 		if !strings.HasPrefix(response.line, "* LIST ") {
 			continue
 		}
-		name := parseLastQuoted(response.line)
+		name, noselect := parseListMailboxName(response.line)
 		if name == "" {
+			continue
+		}
+		if skipMailboxListResponse(name, noselect) {
 			continue
 		}
 		mailboxes = append(mailboxes, mailboxFromIMAPName(name))
@@ -274,16 +277,64 @@ func responseFlagged(line string) bool {
 	return strings.Contains(strings.ToUpper(line), `\FLAGGED`)
 }
 
-func parseLastQuoted(line string) string {
-	end := strings.LastIndex(line, `"`)
-	if end <= 0 {
-		return ""
+func skipMailboxListResponse(name string, noselect bool) bool {
+	return noselect || name == "."
+}
+
+func parseListMailboxName(line string) (string, bool) {
+	rest := strings.TrimSpace(strings.TrimPrefix(line, "* LIST "))
+	if !strings.HasPrefix(rest, "(") {
+		return "", false
 	}
-	start := strings.LastIndex(line[:end], `"`)
-	if start == -1 {
-		return ""
+	flagsEnd := strings.Index(rest, ")")
+	if flagsEnd == -1 {
+		return "", false
 	}
-	return line[start+1 : end]
+	flags := strings.ToUpper(rest[:flagsEnd+1])
+	noselect := strings.Contains(flags, `\NOSELECT`)
+	rest = strings.TrimSpace(rest[flagsEnd+1:])
+	_, rest, ok := parseIMAPListToken(rest)
+	if !ok {
+		return "", noselect
+	}
+	name, _, ok := parseIMAPListToken(rest)
+	if !ok {
+		return "", noselect
+	}
+	return name, noselect
+}
+
+func parseIMAPListToken(value string) (string, string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", "", false
+	}
+	if value[0] != '"' {
+		token, rest, _ := strings.Cut(value, " ")
+		if strings.EqualFold(token, "NIL") {
+			return "", rest, true
+		}
+		return token, rest, true
+	}
+	var builder strings.Builder
+	escaped := false
+	for i := 1; i < len(value); i++ {
+		character := value[i]
+		if escaped {
+			builder.WriteByte(character)
+			escaped = false
+			continue
+		}
+		if character == '\\' {
+			escaped = true
+			continue
+		}
+		if character == '"' {
+			return builder.String(), value[i+1:], true
+		}
+		builder.WriteByte(character)
+	}
+	return "", "", false
 }
 
 func mailboxFromIMAPName(name string) Mailbox {

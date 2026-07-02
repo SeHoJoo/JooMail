@@ -3,10 +3,16 @@ package httpapi
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -207,6 +213,76 @@ func TestSessionUsesStoredCredentialForMailboxAndMessageRoutes(t *testing.T) {
 	}
 }
 
+func TestAccountsSkipNoselectNamespaceRootMailbox(t *testing.T) {
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		mailboxLines: []string{
+			`* LIST (\Noselect \HasChildren) "." "."`,
+			`* LIST () "." "INBOX"`,
+			`* LIST () "." "Sent"`,
+		},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var body struct {
+		Accounts []Account `json:"accounts"`
+	}
+	decode(t, recorder, &body)
+	if len(body.Accounts) != 1 {
+		t.Fatalf("accounts = %#v", body.Accounts)
+	}
+	var mailboxIDs []string
+	for _, mailbox := range body.Accounts[0].Mailboxes {
+		mailboxIDs = append(mailboxIDs, mailbox.ID)
+	}
+	if strings.Contains(strings.Join(mailboxIDs, ","), "mbox_Lg") {
+		t.Fatalf("mailbox IDs = %#v, should not include noselect namespace root", mailboxIDs)
+	}
+	if !containsString(mailboxIDs, "inbox") {
+		t.Fatalf("mailbox IDs = %#v, want inbox", mailboxIDs)
+	}
+}
+
+func TestAccountsParseUnquotedMailboxNamesWithDotDelimiter(t *testing.T) {
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		mailboxLines: []string{
+			`* LIST () "." INBOX`,
+			`* LIST () "." Sent`,
+			`* LIST () "." Archive.2026`,
+		},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var body struct {
+		Accounts []Account `json:"accounts"`
+	}
+	decode(t, recorder, &body)
+	if len(body.Accounts) != 1 {
+		t.Fatalf("accounts = %#v", body.Accounts)
+	}
+	var labels []string
+	for _, mailbox := range body.Accounts[0].Mailboxes {
+		labels = append(labels, mailbox.Label)
+		if mailbox.ID == "mbox_Lg" {
+			t.Fatalf("mailbox = %#v, parsed delimiter as mailbox", mailbox)
+		}
+	}
+	if !containsString(labels, "Archive.2026") {
+		t.Fatalf("labels = %#v, want Archive.2026", labels)
+	}
+}
+
 func TestMessageSummariesParseUnreadAndFlaggedFromIMAPFlags(t *testing.T) {
 	rawMessage := strings.Join([]string{
 		"From: Alice <alice@example.com>",
@@ -392,6 +468,49 @@ func TestSendUsesStoredCredentialForSMTP(t *testing.T) {
 	}
 }
 
+func TestSendUsesImplicitTLSForSMTPSPort(t *testing.T) {
+	imapHost, imapPort := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+	})
+	var smtpAuthLine string
+	var smtpData string
+	smtpHost, smtpPort := startFakeImplicitTLSSMTPServer(t, &smtpAuthLine, &smtpData)
+	config := testConfig(t, imapHost, imapPort)
+	config.SMTPHost = smtpHost
+	config.SMTPPort = smtpPort
+	config.SMTPTLS = true
+	config.SMTPStartTLS = true
+	config.SMTPUserFormat = "localpart"
+	server, cookie := loginTestSessionWithPassword(t, config, "mail-password")
+
+	originalSMTPTLSConfig := newSMTPTLSConfig
+	newSMTPTLSConfig = func(host string) *tls.Config {
+		return &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}
+	}
+	t.Cleanup(func() { newSMTPTLSConfig = originalSMTPTLSConfig })
+
+	recorder := requestWithServer(t, server, http.MethodPost, "/api/send", strings.NewReader(`{"to":["alice@example.com"],"subject":"Hello","textBody":"Plain message"}`), cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	authPayload := decodeSMTPPlainAuth(t, smtpAuthLine)
+	if authPayload != "\x00jooseho\x00mail-password" {
+		t.Fatalf("smtp auth payload = %q", authPayload)
+	}
+	if !strings.Contains(smtpData, "Plain message") {
+		t.Fatalf("smtp data = %q", smtpData)
+	}
+}
+
+func TestSMTPPort465UsesImplicitTLS(t *testing.T) {
+	config := Config{SMTPPort: "465", SMTPStartTLS: true}
+
+	if !smtpImplicitTLS(config) {
+		t.Fatal("smtpImplicitTLS = false, want true for port 465")
+	}
+}
+
 func TestLogoutDeletesCredentialAndExpiresCookie(t *testing.T) {
 	host, port := startFakeIMAPServer(t, fakeIMAPScript{
 		onLogin: func(username, password string) string { return "OK LOGIN completed" },
@@ -486,6 +605,15 @@ func readFile(t *testing.T, path string) []byte {
 	return contents
 }
 
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func testConfig(t *testing.T, host string, port string) Config {
 	t.Helper()
 	key := bytes.Repeat([]byte{7}, 32)
@@ -549,11 +677,12 @@ func credentialFiles(t *testing.T, dir string) []string {
 }
 
 type fakeIMAPScript struct {
-	onLogin   func(username, password string) string
-	onSelect  func(mailbox string) string
-	mailboxes []string
-	messages  map[string]map[string]string
-	flags     map[string]map[string]string
+	onLogin      func(username, password string) string
+	onSelect     func(mailbox string) string
+	mailboxes    []string
+	mailboxLines []string
+	messages     map[string]map[string]string
+	flags        map[string]map[string]string
 }
 
 func startFakeIMAPServer(t *testing.T, script fakeIMAPScript) (string, string) {
@@ -608,12 +737,18 @@ func handleFakeIMAPConn(conn net.Conn, script fakeIMAPScript) {
 			}
 			_, _ = conn.Write([]byte(tag + " " + response + "\r\n"))
 		case "LIST":
-			mailboxes := script.mailboxes
-			if len(mailboxes) == 0 {
-				mailboxes = []string{"INBOX"}
-			}
-			for _, mailbox := range mailboxes {
-				_, _ = fmt.Fprintf(conn, "* LIST () \"/\" %q\r\n", mailbox)
+			if len(script.mailboxLines) > 0 {
+				for _, line := range script.mailboxLines {
+					_, _ = conn.Write([]byte(line + "\r\n"))
+				}
+			} else {
+				mailboxes := script.mailboxes
+				if len(mailboxes) == 0 {
+					mailboxes = []string{"INBOX"}
+				}
+				for _, mailbox := range mailboxes {
+					_, _ = fmt.Fprintf(conn, "* LIST () \"/\" %q\r\n", mailbox)
+				}
 			}
 			_, _ = conn.Write([]byte(tag + " OK LIST completed\r\n"))
 		case "SELECT":
@@ -689,46 +824,7 @@ func startFakeSMTPServer(t *testing.T, authLine *string, data *string) (string, 
 			return
 		}
 		defer conn.Close()
-		reader := bufio.NewReader(conn)
-		_, _ = conn.Write([]byte("220 fake smtp\r\n"))
-		inData := false
-		var dataLines []string
-		for {
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				return
-			}
-			line = strings.TrimRight(line, "\r\n")
-			if inData {
-				if line == "." {
-					*data = strings.Join(dataLines, "\n")
-					_, _ = conn.Write([]byte("250 queued\r\n"))
-					inData = false
-					continue
-				}
-				dataLines = append(dataLines, line)
-				continue
-			}
-			switch {
-			case strings.HasPrefix(line, "EHLO"):
-				_, _ = conn.Write([]byte("250-localhost\r\n250 AUTH PLAIN\r\n"))
-			case strings.HasPrefix(line, "AUTH PLAIN "):
-				*authLine = line
-				_, _ = conn.Write([]byte("235 authenticated\r\n"))
-			case strings.HasPrefix(line, "MAIL FROM:"):
-				_, _ = conn.Write([]byte("250 ok\r\n"))
-			case strings.HasPrefix(line, "RCPT TO:"):
-				_, _ = conn.Write([]byte("250 ok\r\n"))
-			case line == "DATA":
-				_, _ = conn.Write([]byte("354 send data\r\n"))
-				inData = true
-			case line == "QUIT":
-				_, _ = conn.Write([]byte("221 bye\r\n"))
-				return
-			default:
-				_, _ = conn.Write([]byte("250 ok\r\n"))
-			}
-		}
+		serveFakeSMTPConn(conn, authLine, data)
 	}()
 
 	host, port, err := net.SplitHostPort(listener.Addr().String())
@@ -736,6 +832,106 @@ func startFakeSMTPServer(t *testing.T, authLine *string, data *string) (string, 
 		t.Fatalf("split smtp listener address: %v", err)
 	}
 	return host, port
+}
+
+func startFakeImplicitTLSSMTPServer(t *testing.T, authLine *string, data *string) (string, string) {
+	t.Helper()
+	certificate := newTestCertificate(t)
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12})
+	if err != nil {
+		t.Fatalf("listen fake smtps: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("fake smtps server did not finish")
+		}
+	})
+
+	go func() {
+		defer close(done)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		serveFakeSMTPConn(conn, authLine, data)
+	}()
+
+	host, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split smtps listener address: %v", err)
+	}
+	return host, port
+}
+
+func serveFakeSMTPConn(conn net.Conn, authLine *string, data *string) {
+	reader := bufio.NewReader(conn)
+	_, _ = conn.Write([]byte("220 fake smtp\r\n"))
+	inData := false
+	var dataLines []string
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if inData {
+			if line == "." {
+				*data = strings.Join(dataLines, "\n")
+				_, _ = conn.Write([]byte("250 queued\r\n"))
+				inData = false
+				continue
+			}
+			dataLines = append(dataLines, line)
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "EHLO"):
+			_, _ = conn.Write([]byte("250-localhost\r\n250 AUTH PLAIN\r\n"))
+		case strings.HasPrefix(line, "AUTH PLAIN "):
+			*authLine = line
+			_, _ = conn.Write([]byte("235 authenticated\r\n"))
+		case strings.HasPrefix(line, "MAIL FROM:"):
+			_, _ = conn.Write([]byte("250 ok\r\n"))
+		case strings.HasPrefix(line, "RCPT TO:"):
+			_, _ = conn.Write([]byte("250 ok\r\n"))
+		case line == "DATA":
+			_, _ = conn.Write([]byte("354 send data\r\n"))
+			inData = true
+		case line == "QUIT":
+			_, _ = conn.Write([]byte("221 bye\r\n"))
+			return
+		default:
+			_, _ = conn.Write([]byte("250 ok\r\n"))
+		}
+	}
+}
+
+func newTestCertificate(t *testing.T) tls.Certificate {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:     []string{"localhost"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
 func decodeSMTPPlainAuth(t *testing.T, line string) string {
