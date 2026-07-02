@@ -311,7 +311,7 @@ export function AppShell() {
           <ReadingPane message={selectedMessage} mode={mode} onRetry={retry} onReply={() => openReply()} />
         </div>
       </div>
-      {composeOpen ? <ComposePanel account={selectedAccount} message={composeMessage} onClose={closeCompose} /> : null}
+      {composeOpen ? <ComposePanel accounts={accounts} account={selectedAccount} message={composeMessage} onClose={closeCompose} /> : null}
       {import.meta.env.DEV && !composeOpen ? <DevStateSwitcher states={QA_STATES} onApply={applyQaState} /> : null}
     </div>
   );
