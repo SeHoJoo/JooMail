@@ -74,18 +74,18 @@ func MockStore() *Store {
 
 func defaultMailboxes() []Mailbox {
 	return []Mailbox{
-		{ID: "inbox", Label: "받은편지함", Kind: "inbox", Unread: 12},
-		{ID: "starred", Label: "중요 표시", Kind: "starred"},
-		{ID: "sent", Label: "보낸편지함", Kind: "sent"},
-		{ID: "drafts", Label: "임시보관함", Kind: "drafts", Unread: 2},
-		{ID: "archive", Label: "보관함", Kind: "archive"},
-		{ID: "spam", Label: "스팸", Kind: "spam", Unread: 3},
-		{ID: "trash", Label: "휴지통", Kind: "trash"},
+		{ID: "inbox", Label: "받은편지함", Kind: "inbox", Selectable: true, Unread: 12},
+		{ID: "starred", Label: "중요 표시", Kind: "starred", Selectable: true},
+		{ID: "sent", Label: "보낸편지함", Kind: "sent", Selectable: true},
+		{ID: "drafts", Label: "임시보관함", Kind: "drafts", Selectable: true, Unread: 2},
+		{ID: "archive", Label: "보관함", Kind: "archive", Selectable: true},
+		{ID: "spam", Label: "스팸", Kind: "spam", Selectable: true, Unread: 3},
+		{ID: "trash", Label: "휴지통", Kind: "trash", Selectable: true},
 		{
-			ID: "work", Label: "Work", Kind: "folder",
+			ID: "work", Label: "Work", Kind: "folder", Selectable: true,
 			Children: []Mailbox{
-				{ID: "clients", Label: "Clients", Kind: "folder", Unread: 4},
-				{ID: "internal", Label: "Internal", Kind: "folder"},
+				{ID: "clients", Label: "Clients", Kind: "folder", Selectable: true, Unread: 4},
+				{ID: "internal", Label: "Internal", Kind: "folder", Selectable: true},
 			},
 		},
 	}

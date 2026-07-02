@@ -29,7 +29,7 @@ export function MessageList({ title, unreadCount, messages, mailboxes, selectedI
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [actionError, setActionError] = useState("");
   const allVisibleChecked = messages.length > 0 && messages.every((message) => checkedIds.has(message.id));
-  const moveTargets = mailboxes.filter((mailbox) => mailbox.kind !== "starred");
+  const moveTargets = mailboxes.filter((mailbox) => mailbox.kind !== "starred" && mailbox.selectable !== false);
 
   return (
     <section className="flex min-w-[320px] shrink-0 flex-col border-r border-line bg-white" style={{ width: "var(--list-width)" }}>

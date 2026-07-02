@@ -109,10 +109,8 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         : visibleMessages.find((message) => message.id === replyMessageId)
       : mockMessages.find((message) => message.id === replyMessageId)
     : undefined;
-  const selectedMailbox = selectedAccount.mailboxes
-    .flatMap((mailbox) => [mailbox, ...(mailbox.children ?? [])])
-    .find((mailbox) => mailbox.id === mailboxId);
   const flatMailboxes = useMemo(() => flattenMailboxes(selectedAccount.mailboxes), [selectedAccount.mailboxes]);
+  const selectedMailbox = flatMailboxes.find((mailbox) => mailbox.id === mailboxId);
 
   useEffect(() => {
     localStorage.setItem(LIST_WIDTH_KEY, String(listWidth));
@@ -332,6 +330,8 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   }
 
   function selectMailbox(nextMailboxId: string) {
+    const nextMailbox = flatMailboxes.find((mailbox) => mailbox.id === nextMailboxId);
+    if (nextMailbox?.selectable === false) return;
     setMailboxId(nextMailboxId);
     setSearch("");
     setForceEmptyList(false);
@@ -515,13 +515,13 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   }
 
   function moveToKind(message: Message, kind: Mailbox["kind"]) {
-    const mailbox = flatMailboxes.find((item) => item.kind === kind);
+    const mailbox = flatMailboxes.find((item) => item.kind === kind && item.selectable !== false);
     if (!mailbox) throw new Error(`missing ${kind} mailbox`);
     return moveMessage(message, mailbox.id);
   }
 
   function bulkMoveToKind(kind: Mailbox["kind"]) {
-    const mailbox = flatMailboxes.find((item) => item.kind === kind);
+    const mailbox = flatMailboxes.find((item) => item.kind === kind && item.selectable !== false);
     if (!mailbox) throw new Error(`missing ${kind} mailbox`);
     return bulkMoveMessages(mailbox.id);
   }

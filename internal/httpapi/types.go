@@ -1,11 +1,12 @@
 package httpapi
 
 type Mailbox struct {
-	ID       string    `json:"id"`
-	Label    string    `json:"label"`
-	Kind     string    `json:"kind"`
-	Unread   int       `json:"unread,omitempty"`
-	Children []Mailbox `json:"children,omitempty"`
+	ID         string    `json:"id"`
+	Label      string    `json:"label"`
+	Kind       string    `json:"kind"`
+	Selectable bool      `json:"selectable"`
+	Unread     int       `json:"unread,omitempty"`
+	Children   []Mailbox `json:"children,omitempty"`
 }
 
 type Account struct {

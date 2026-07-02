@@ -331,6 +331,78 @@ func TestAccountsParseUnquotedMailboxNamesWithDotDelimiter(t *testing.T) {
 	}
 }
 
+func TestAccountsBuildNestedMailboxTree(t *testing.T) {
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		mailboxLines: []string{
+			`* LIST () "/" "INBOX"`,
+			`* LIST (\Noselect \HasChildren) "/" "Work"`,
+			`* LIST () "/" "Work/Clients"`,
+			`* LIST () "/" "Work/Internal"`,
+			`* LIST () "/" "Work/Internal/Reports"`,
+		},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var body struct {
+		Accounts []Account `json:"accounts"`
+	}
+	decode(t, recorder, &body)
+	work, ok := findMailboxByLabel(body.Accounts[0].Mailboxes, "Work")
+	if !ok {
+		t.Fatalf("mailboxes = %#v, want Work parent", body.Accounts[0].Mailboxes)
+	}
+	if work.Selectable {
+		t.Fatalf("Work selectable = true, want false for noselect parent")
+	}
+	if len(work.Children) != 2 {
+		t.Fatalf("Work children = %#v, want Clients and Internal", work.Children)
+	}
+	internal, ok := findMailboxByLabel(work.Children, "Internal")
+	if !ok {
+		t.Fatalf("Work children = %#v, want Internal", work.Children)
+	}
+	reports, ok := findMailboxByLabel(internal.Children, "Reports")
+	if !ok || !reports.Selectable {
+		t.Fatalf("Internal children = %#v, want selectable Reports", internal.Children)
+	}
+}
+
+func TestAccountsBuildNestedMailboxTreeWithDotDelimiter(t *testing.T) {
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		mailboxLines: []string{
+			`* LIST () "." INBOX`,
+			`* LIST () "." Projects`,
+			`* LIST () "." Projects.2026`,
+		},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var body struct {
+		Accounts []Account `json:"accounts"`
+	}
+	decode(t, recorder, &body)
+	projects, ok := findMailboxByLabel(body.Accounts[0].Mailboxes, "Projects")
+	if !ok {
+		t.Fatalf("mailboxes = %#v, want Projects parent", body.Accounts[0].Mailboxes)
+	}
+	child, ok := findMailboxByLabel(projects.Children, "2026")
+	if !ok || !child.Selectable {
+		t.Fatalf("Projects children = %#v, want selectable 2026", projects.Children)
+	}
+}
+
 func TestAccountsDecodeModifiedUTF7MailboxNames(t *testing.T) {
 	host, port := startFakeIMAPServer(t, fakeIMAPScript{
 		onLogin: func(username, password string) string { return "OK LOGIN completed" },
@@ -1035,6 +1107,15 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func findMailboxByLabel(mailboxes []Mailbox, label string) (Mailbox, bool) {
+	for _, mailbox := range mailboxes {
+		if mailbox.Label == label {
+			return mailbox, true
+		}
+	}
+	return Mailbox{}, false
 }
 
 func testConfig(t *testing.T, host string, port string) Config {

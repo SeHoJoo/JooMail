@@ -209,16 +209,21 @@ function MobileFolderDrawer({ account, selectedMailboxId, onSelectMailbox, onClo
 
 function MobileMailboxButton({ mailbox, selectedId, level = 0, onSelect }: { mailbox: Mailbox; selectedId: string; level?: number; onSelect: (id: string) => void }) {
   const selected = selectedId === mailbox.id;
+  const selectable = mailbox.selectable !== false;
 
   return (
     <div>
       <button
         className={[
           "mx-[11px] flex h-9 w-[calc(100%-22px)] items-center gap-2 rounded-md px-2 text-left text-[13px]",
-          selected ? "bg-selected font-medium text-[#1b47a0]" : "text-[#3a3f45] hover:bg-white",
+          selected ? "bg-selected font-medium text-[#1b47a0]" : "text-[#3a3f45]",
+          selectable ? "hover:bg-white" : "cursor-default text-muted",
         ].join(" ")}
         style={{ paddingLeft: `${10 + level * 14}px` }}
-        onClick={() => onSelect(mailbox.id)}
+        onClick={() => {
+          if (selectable) onSelect(mailbox.id);
+        }}
+        disabled={!selectable}
         type="button"
       >
         <Icon name={iconByKind[mailbox.kind]} className="h-4 w-4 shrink-0" />

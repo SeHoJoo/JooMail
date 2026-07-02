@@ -44,6 +44,12 @@ type imapResponse struct {
 	literal []byte
 }
 
+type mailboxListEntry struct {
+	name      string
+	delimiter string
+	noselect  bool
+}
+
 type AttachmentPayload struct {
 	Name        string
 	ContentType string
@@ -86,41 +92,52 @@ func (c *imapClient) login(username string, password string) error {
 }
 
 func (c *imapClient) listMailboxes() ([]Mailbox, error) {
-	names, err := c.listMailboxNames()
+	entries, err := c.listMailboxEntries()
 	if err != nil {
 		return nil, err
 	}
-	mailboxes := make([]Mailbox, 0, len(names))
-	for _, name := range names {
-		mailboxes = append(mailboxes, mailboxFromIMAPName(name))
-	}
-	sortMailboxes(mailboxes)
+	mailboxes := buildMailboxTree(entries)
 	if len(mailboxes) == 0 {
-		mailboxes = append(mailboxes, mailboxFromIMAPName("INBOX"))
+		mailboxes = append(mailboxes, mailboxFromIMAPName("INBOX", "", false))
 	}
 	return mailboxes, nil
 }
 
 func (c *imapClient) listMailboxNames() ([]string, error) {
+	entries, err := c.listMailboxEntries()
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.noselect {
+			continue
+		}
+		names = append(names, entry.name)
+	}
+	return names, nil
+}
+
+func (c *imapClient) listMailboxEntries() ([]mailboxListEntry, error) {
 	responses, err := c.command(`LIST "" "*"`)
 	if err != nil {
 		return nil, err
 	}
-	var names []string
+	var entries []mailboxListEntry
 	for _, response := range responses {
 		if !strings.HasPrefix(response.line, "* LIST ") {
 			continue
 		}
-		name, noselect := parseListMailboxName(response.line)
+		name, delimiter, noselect := parseListMailboxName(response.line)
 		if name == "" {
 			continue
 		}
-		if skipMailboxListResponse(name, noselect) {
+		if skipMailboxListResponse(name) {
 			continue
 		}
-		names = append(names, name)
+		entries = append(entries, mailboxListEntry{name: name, delimiter: delimiter, noselect: noselect})
 	}
-	return names, nil
+	return entries, nil
 }
 
 func (c *imapClient) appendSentMessage(raw string) error {
@@ -537,8 +554,8 @@ func responseFlagged(line string) bool {
 	return strings.Contains(strings.ToUpper(line), `\FLAGGED`)
 }
 
-func skipMailboxListResponse(name string, noselect bool) bool {
-	return noselect || name == "."
+func skipMailboxListResponse(name string) bool {
+	return name == "."
 }
 
 func sortMailboxes(mailboxes []Mailbox) {
@@ -550,6 +567,9 @@ func sortMailboxes(mailboxes []Mailbox) {
 		}
 		return strings.ToLower(mailboxes[i].Label) < strings.ToLower(mailboxes[j].Label)
 	})
+	for i := range mailboxes {
+		sortMailboxes(mailboxes[i].Children)
+	}
 }
 
 func mailboxKindOrder(kind string) int {
@@ -589,27 +609,27 @@ func isSentMailboxName(name string) bool {
 	return strings.HasSuffix(normalized, "/sent") || strings.HasSuffix(normalized, ".sent")
 }
 
-func parseListMailboxName(line string) (string, bool) {
+func parseListMailboxName(line string) (string, string, bool) {
 	rest := strings.TrimSpace(strings.TrimPrefix(line, "* LIST "))
 	if !strings.HasPrefix(rest, "(") {
-		return "", false
+		return "", "", false
 	}
 	flagsEnd := strings.Index(rest, ")")
 	if flagsEnd == -1 {
-		return "", false
+		return "", "", false
 	}
 	flags := strings.ToUpper(rest[:flagsEnd+1])
 	noselect := strings.Contains(flags, `\NOSELECT`)
 	rest = strings.TrimSpace(rest[flagsEnd+1:])
-	_, rest, ok := parseIMAPListToken(rest)
+	delimiter, rest, ok := parseIMAPListToken(rest)
 	if !ok {
-		return "", noselect
+		return "", "", noselect
 	}
 	name, _, ok := parseIMAPListToken(rest)
 	if !ok {
-		return "", noselect
+		return "", "", noselect
 	}
-	return name, noselect
+	return name, delimiter, noselect
 }
 
 func parseIMAPListToken(value string) (string, string, bool) {
@@ -645,11 +665,70 @@ func parseIMAPListToken(value string) (string, string, bool) {
 	return "", "", false
 }
 
-func mailboxFromIMAPName(name string) Mailbox {
+func buildMailboxTree(entries []mailboxListEntry) []Mailbox {
+	nodes := make(map[string]Mailbox, len(entries))
+	entryByName := make(map[string]mailboxListEntry, len(entries))
+	childrenByParent := make(map[string][]string)
+	childNames := make(map[string]bool)
+
+	for _, entry := range entries {
+		nodes[entry.name] = mailboxFromIMAPName(entry.name, "", entry.noselect)
+		entryByName[entry.name] = entry
+	}
+
+	for _, entry := range entries {
+		parentName := parentMailboxName(entry.name, entry.delimiter)
+		if parentName == "" {
+			continue
+		}
+		if _, ok := nodes[parentName]; ok {
+			childrenByParent[parentName] = append(childrenByParent[parentName], entry.name)
+			childNames[entry.name] = true
+		}
+	}
+
+	var materialize func(string) Mailbox
+	materialize = func(name string) Mailbox {
+		mailbox := nodes[name]
+		if childNames[name] {
+			entry := entryByName[name]
+			mailbox.Label = mailboxLabel(name, entry.delimiter)
+		}
+		for _, childName := range childrenByParent[name] {
+			mailbox.Children = append(mailbox.Children, materialize(childName))
+		}
+		sortMailboxes(mailbox.Children)
+		return mailbox
+	}
+
+	var mailboxes []Mailbox
+	for _, entry := range entries {
+		if childNames[entry.name] {
+			continue
+		}
+		mailboxes = append(mailboxes, materialize(entry.name))
+	}
+	sortMailboxes(mailboxes)
+	return mailboxes
+}
+
+func parentMailboxName(name string, delimiter string) string {
+	if delimiter == "" {
+		return ""
+	}
+	index := strings.LastIndex(name, delimiter)
+	if index <= 0 {
+		return ""
+	}
+	return name[:index]
+}
+
+func mailboxFromIMAPName(name string, delimiter string, noselect bool) Mailbox {
 	return Mailbox{
-		ID:    mailboxID(name),
-		Label: mailboxLabel(name),
-		Kind:  mailboxKind(name),
+		ID:         mailboxID(name),
+		Label:      mailboxLabel(name, delimiter),
+		Kind:       mailboxKind(name),
+		Selectable: !noselect,
 	}
 }
 
@@ -671,7 +750,7 @@ func decodeMailboxID(id string) (string, error) {
 	return id, nil
 }
 
-func mailboxLabel(name string) string {
+func mailboxLabel(name string, delimiter string) string {
 	switch strings.ToLower(name) {
 	case "inbox":
 		return "받은편지함"
@@ -686,8 +765,11 @@ func mailboxLabel(name string) string {
 	case "trash":
 		return "휴지통"
 	default:
-		parts := strings.Split(name, "/")
-		return decodeIMAPModifiedUTF7(parts[len(parts)-1])
+		if delimiter != "" {
+			parts := strings.Split(name, delimiter)
+			return decodeIMAPModifiedUTF7(parts[len(parts)-1])
+		}
+		return decodeIMAPModifiedUTF7(name)
 	}
 }
 

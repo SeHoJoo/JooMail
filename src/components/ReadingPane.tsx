@@ -27,7 +27,7 @@ export function ReadingPane({ message, mode, mailboxes, showRemoteImagesByDefaul
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [actionError, setActionError] = useState("");
   const htmlBody = message?.htmlBody ? revealRemoteImages(message.htmlBody, showRemoteImages) : "";
-  const moveTargets = message ? mailboxes.filter((mailbox) => mailbox.id !== message.mailboxId && mailbox.kind !== "starred") : [];
+  const moveTargets = message ? mailboxes.filter((mailbox) => mailbox.id !== message.mailboxId && mailbox.kind !== "starred" && mailbox.selectable !== false) : [];
 
   useEffect(() => {
     setRecipientsOpen(false);

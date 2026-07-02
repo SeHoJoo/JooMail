@@ -12,6 +12,7 @@ export type Mailbox = {
   id: string;
   label: string;
   kind: MailboxKind;
+  selectable?: boolean;
   unread?: number;
   children?: Mailbox[];
 };
