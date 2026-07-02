@@ -414,6 +414,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
       <MobileInbox
         account={selectedAccount}
         messages={visibleMessages}
+        selectedMessage={selectedMessage}
         selectedId={selectedMessageId}
         checkedIds={checkedIds}
         search={search}

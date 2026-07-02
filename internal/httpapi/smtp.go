@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"net/smtp"
 	"strings"
+	"time"
 )
+
+const smtpCommandTimeout = 10 * time.Second
 
 type sendRequest struct {
 	To       []string `json:"to"`
@@ -55,8 +58,14 @@ func (s *Server) sendMail(credential storedCredential, request sendRequest) erro
 	}
 
 	address := net.JoinHostPort(s.config.SMTPHost, s.config.SMTPPort)
-	client, err := smtp.Dial(address)
+	conn, err := (&net.Dialer{Timeout: smtpCommandTimeout}).Dial("tcp", address)
 	if err != nil {
+		return err
+	}
+	_ = conn.SetDeadline(time.Now().Add(smtpCommandTimeout))
+	client, err := smtp.NewClient(conn, s.config.SMTPHost)
+	if err != nil {
+		_ = conn.Close()
 		return err
 	}
 	defer client.Close()

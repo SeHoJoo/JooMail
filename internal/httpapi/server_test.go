@@ -51,6 +51,18 @@ func TestProtectedRoutesRejectMissingSession(t *testing.T) {
 	}
 }
 
+func TestProtectedRoutesRejectInvalidSession(t *testing.T) {
+	config := testConfig(t, "127.0.0.1", "1")
+	server := NewServerWithConfig(MockStore(), config)
+	cookie := &http.Cookie{Name: "joomail_session", Value: "invalid.token"}
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts", nil, cookie)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+	}
+}
+
 func TestLoginStoresEncryptedCredentialAndSetsRememberedSessionCookie(t *testing.T) {
 	host, port := startFakeIMAPServer(t, fakeIMAPScript{
 		onLogin: func(username, password string) string {
@@ -195,6 +207,39 @@ func TestSessionUsesStoredCredentialForMailboxAndMessageRoutes(t *testing.T) {
 	}
 }
 
+func TestMessageSummariesParseUnreadAndFlaggedFromIMAPFlags(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Flagged unread message",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"",
+		"Hello from IMAP.",
+	}, "\r\n")
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin:  func(username, password string) string { return "OK LOGIN completed" },
+		messages: map[string]map[string]string{"INBOX": {"7": rawMessage}},
+		flags:    map[string]map[string]string{"INBOX": {"7": `(\Flagged)`}},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts/jooseho%40good-night.co.kr/mailboxes/inbox/messages", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var body struct {
+		Messages []MessageSummary `json:"messages"`
+	}
+	decode(t, recorder, &body)
+	if len(body.Messages) != 1 {
+		t.Fatalf("message count = %d, want 1", len(body.Messages))
+	}
+	if !body.Messages[0].Unread || !body.Messages[0].Flagged {
+		t.Fatalf("message flags = unread %v flagged %v, want true/true", body.Messages[0].Unread, body.Messages[0].Flagged)
+	}
+}
+
 func TestParseRawMessageFixture(t *testing.T) {
 	rawMessage := strings.Join([]string{
 		"From: Alice <alice@example.com>",
@@ -223,6 +268,95 @@ func TestParseRawMessageFixture(t *testing.T) {
 	}
 	if message.Subject != "MIME parsed by backend" {
 		t.Fatalf("subject = %q", message.Subject)
+	}
+}
+
+func TestParseRawMessageDecodesNonUTF8Charset(t *testing.T) {
+	raw := bytes.NewBuffer(nil)
+	raw.WriteString(strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: =?EUC-KR?B?vsiz58fPvLy/5A==?=",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: text/plain; charset=EUC-KR",
+		"",
+	}, "\r\n"))
+	raw.WriteString("\r\n")
+	raw.Write([]byte{0xbe, 0xc8, 0xb3, 0xe7, 0xc7, 0xcf, 0xbc, 0xbc, 0xbf, 0xe4})
+
+	message, err := parseRawMessage("account", "inbox", "8", raw.Bytes())
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if message.Subject != "안녕하세요" {
+		t.Fatalf("subject = %q, want decoded EUC-KR", message.Subject)
+	}
+	if strings.Join(message.TextBody, "\n") != "안녕하세요" {
+		t.Fatalf("textBody = %#v, want decoded EUC-KR", message.TextBody)
+	}
+}
+
+func TestParseRawMessageMultipartAlternativeSanitizesHTML(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Alternative body",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: multipart/alternative; boundary=alt",
+		"",
+		"--alt",
+		"Content-Type: text/plain; charset=utf-8",
+		"Content-Transfer-Encoding: quoted-printable",
+		"",
+		"Plain=20fallback.",
+		"",
+		"--alt",
+		"Content-Type: text/html; charset=utf-8",
+		"Content-Transfer-Encoding: base64",
+		"",
+		"PHA+SGVsbG8gPHN0cm9uZz5zYWZlPC9zdHJvbmc+PC9wPjxzY3JpcHQ+YWxlcnQoMSk8L3NjcmlwdD48aW1nIHNyYz0iaHR0cHM6Ly90cmFja2VyLmV4YW1wbGUvcGl4ZWwucG5nIiBvbmVycm9yPSJhbGVydCgxKSI+",
+		"--alt--",
+		"",
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if strings.Join(message.TextBody, "\n") != "Plain fallback." {
+		t.Fatalf("textBody = %#v", message.TextBody)
+	}
+	if !strings.Contains(message.HTMLBody, "Hello") || !strings.Contains(message.HTMLBody, "safe") {
+		t.Fatalf("htmlBody = %q, want sanitized HTML body", message.HTMLBody)
+	}
+	for _, unsafe := range []string{"script", "alert", "onerror", "tracker.example"} {
+		if strings.Contains(strings.ToLower(message.HTMLBody), unsafe) {
+			t.Fatalf("htmlBody = %q, contains unsafe content %q", message.HTMLBody, unsafe)
+		}
+	}
+	if !message.RemoteImagesBlocked {
+		t.Fatal("remoteImagesBlocked = false, want true for remote image HTML")
+	}
+}
+
+func TestIMAPProtocolErrorsReturnGenericResponse(t *testing.T) {
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		onSelect: func(mailbox string) string {
+			return "NO secret backend failure text"
+		},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts/jooseho%40good-night.co.kr/mailboxes/inbox/messages", nil, cookie)
+
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusBadGateway, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "secret backend failure text") {
+		t.Fatalf("response leaked upstream error: %s", recorder.Body.String())
 	}
 }
 
@@ -416,8 +550,10 @@ func credentialFiles(t *testing.T, dir string) []string {
 
 type fakeIMAPScript struct {
 	onLogin   func(username, password string) string
+	onSelect  func(mailbox string) string
 	mailboxes []string
 	messages  map[string]map[string]string
+	flags     map[string]map[string]string
 }
 
 func startFakeIMAPServer(t *testing.T, script fakeIMAPScript) (string, string) {
@@ -484,6 +620,10 @@ func handleFakeIMAPConn(conn net.Conn, script fakeIMAPScript) {
 			if len(fields) >= 3 {
 				selectedMailbox = unquoteIMAPTestString(fields[2])
 			}
+			if script.onSelect != nil {
+				_, _ = conn.Write([]byte(tag + " " + script.onSelect(selectedMailbox) + "\r\n"))
+				continue
+			}
 			count := len(script.messages[selectedMailbox])
 			_, _ = fmt.Fprintf(conn, "* %d EXISTS\r\n%s OK SELECT completed\r\n", count, tag)
 		case "UID":
@@ -505,7 +645,11 @@ func handleFakeIMAPConn(conn net.Conn, script fakeIMAPScript) {
 					if raw == "" {
 						continue
 					}
-					_, _ = fmt.Fprintf(conn, "* 1 FETCH (UID %s BODY[] {%d}\r\n%s)\r\n", uid, len(raw), raw)
+					flags := script.flags[selectedMailbox][uid]
+					if flags == "" {
+						flags = `()`
+					}
+					_, _ = fmt.Fprintf(conn, "* 1 FETCH (UID %s FLAGS %s BODY[] {%d}\r\n%s)\r\n", uid, flags, len(raw), raw)
 				}
 				_, _ = conn.Write([]byte(tag + " OK FETCH completed\r\n"))
 			}

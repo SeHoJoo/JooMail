@@ -49,6 +49,7 @@ export type Message = {
   hasAttachment?: boolean;
   remoteImagesBlocked?: boolean;
   body: string[];
+  htmlBody?: string;
   bullets?: string[];
   link?: string;
   attachments?: Attachment[];

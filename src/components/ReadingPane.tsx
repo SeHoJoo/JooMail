@@ -93,30 +93,34 @@ export function ReadingPane({ message, mode, onRetry, onReply }: ReadingPaneProp
             원격 이미지 표시됨
           </div>
         ) : null}
-        <article className="max-w-[750px] whitespace-pre-line text-sm leading-[1.5] text-text">
-          {message.body.slice(0, 3).map((paragraph) => (
-            <p key={paragraph} className="mb-5">
-              {paragraph}
-            </p>
-          ))}
-          {message.bullets ? (
-            <ul className="mb-5 list-disc space-y-2 pl-5">
-              {message.bullets.map((bullet) => (
-                <li key={bullet}>{bullet}</li>
-              ))}
-            </ul>
-          ) : null}
-          {message.body.slice(3).map((paragraph) => (
-            <p key={paragraph} className="mb-5">
-              {paragraph}
-            </p>
-          ))}
-          {message.link ? (
-            <a className="text-[13.5px] text-accent underline" href={message.link}>
-              {message.link}
-            </a>
-          ) : null}
-        </article>
+        {message.htmlBody ? (
+          <article className="max-w-[750px] text-sm leading-[1.5] text-text [&_a]:text-accent [&_a]:underline [&_li]:mb-1 [&_ol]:mb-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-5 [&_ul]:mb-5 [&_ul]:list-disc [&_ul]:pl-5" dangerouslySetInnerHTML={{ __html: message.htmlBody }} />
+        ) : (
+          <article className="max-w-[750px] whitespace-pre-line text-sm leading-[1.5] text-text">
+            {message.body.slice(0, 3).map((paragraph) => (
+              <p key={paragraph} className="mb-5">
+                {paragraph}
+              </p>
+            ))}
+            {message.bullets ? (
+              <ul className="mb-5 list-disc space-y-2 pl-5">
+                {message.bullets.map((bullet) => (
+                  <li key={bullet}>{bullet}</li>
+                ))}
+              </ul>
+            ) : null}
+            {message.body.slice(3).map((paragraph) => (
+              <p key={paragraph} className="mb-5">
+                {paragraph}
+              </p>
+            ))}
+            {message.link ? (
+              <a className="text-[13.5px] text-accent underline" href={message.link}>
+                {message.link}
+              </a>
+            ) : null}
+          </article>
+        )}
         {message.attachments?.length ? (
           <div className="mt-8">
             <div className="mb-3 text-xs text-muted">첨부파일 {message.attachments.length}개 · 3.1 MB</div>

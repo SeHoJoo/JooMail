@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { Account, Message, MockMode } from "../types";
 import { Icon } from "./Icon";
 import { highlight } from "./MessageRow";
@@ -6,6 +7,7 @@ import { EmptyState, ErrorState, LoadingState } from "./StateViews";
 type MobileInboxProps = {
   account: Account;
   messages: Message[];
+  selectedMessage?: Message;
   selectedId?: string;
   checkedIds: Set<string>;
   search: string;
@@ -16,13 +18,25 @@ type MobileInboxProps = {
   onToggleChecked: (id: string) => void;
 };
 
-export function MobileInbox({ account, messages, selectedId, checkedIds, search, mode, onRetry, onCompose, onSelectMessage, onToggleChecked }: MobileInboxProps) {
+export function MobileInbox({ account, messages, selectedMessage, selectedId, checkedIds, search, mode, onRetry, onCompose, onSelectMessage, onToggleChecked }: MobileInboxProps) {
+  const [readingId, setReadingId] = useState("");
   const title = search ? "검색 결과" : "받은편지함";
   const checkedCount = checkedIds.size;
   const selecting = checkedCount > 0;
   const count = search ? messages.length : messages.length === 0 && mode === "normal" ? 0 : account.unread;
   const emptyTitle = search ? "검색 결과가 없습니다" : "받은편지함이 비어 있습니다";
   const emptyDescription = search ? "검색어를 확인해주세요" : "새 메일이 도착하면 여기에 표시됩니다";
+  const readingMessage = readingId && selectedMessage?.id === readingId ? selectedMessage : messages.find((message) => message.id === readingId);
+
+  useEffect(() => {
+    if (readingId && !messages.some((message) => message.id === readingId)) {
+      setReadingId("");
+    }
+  }, [messages, readingId]);
+
+  if (readingMessage) {
+    return <MobileReadingPane message={readingMessage} onBack={() => setReadingId("")} onCompose={onCompose} />;
+  }
 
   return (
     <main className="min-h-screen bg-white pb-28 md:hidden">
@@ -77,7 +91,10 @@ export function MobileInbox({ account, messages, selectedId, checkedIds, search,
               checked ? "bg-selected/70" : "",
             ].join(" ")}
             data-message-id={message.id}
-            onClick={() => onSelectMessage(message.id)}
+            onClick={() => {
+              onSelectMessage(message.id);
+              setReadingId(message.id);
+            }}
           >
             {selectedId === message.id ? <span className="absolute left-0 top-0 h-full w-0.5 bg-accent" /> : null}
             {message.unread ? <span className="absolute left-[50px] top-[30px] h-[7px] w-[7px] rounded-full bg-accent" /> : null}
@@ -110,6 +127,55 @@ export function MobileInbox({ account, messages, selectedId, checkedIds, search,
       <button className="fixed bottom-10 right-6 flex h-14 w-14 items-center justify-center rounded-[18px] bg-accent text-white shadow-[0_8px_20px_rgba(45,100,216,0.42)]" aria-label="새 메일 쓰기" onClick={onCompose}>
         <Icon name="compose" className="h-[22px] w-[22px]" />
       </button>
+    </main>
+  );
+}
+
+function MobileReadingPane({ message, onBack, onCompose }: { message: Message; onBack: () => void; onCompose: () => void }) {
+  return (
+    <main className="min-h-screen bg-white pb-24 md:hidden">
+      <div className="flex h-12 items-center px-6 pt-2 text-sm font-bold text-ink">
+        <span>9:14</span>
+        <span className="ml-auto text-xs font-medium">▮▮  Wi-Fi  ▭</span>
+      </div>
+      <div className="flex h-14 items-center border-b border-line px-4">
+        <button className="flex h-9 w-9 items-center justify-center rounded-lg text-ink hover:bg-[#f6f7f8]" aria-label="메일 목록으로 돌아가기" onClick={onBack} type="button">
+          <Icon name="chevron" className="h-4 w-4 rotate-90" />
+        </button>
+        <div className="ml-2 min-w-0 flex-1 truncate text-[13px] font-semibold text-ink">{message.subject}</div>
+        <button className="ml-2 flex h-9 w-9 items-center justify-center rounded-lg text-ink hover:bg-[#f6f7f8]" aria-label="답장 작성" onClick={onCompose} type="button">
+          <Icon name="compose" className="h-4 w-4" />
+        </button>
+      </div>
+      <article className="px-6 py-5">
+        <h1 className="text-[20px] font-bold leading-7 text-ink">{message.subject}</h1>
+        <div className="mt-5 flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-selected text-[13px] font-bold text-accent">{message.initials}</div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[14px] font-bold text-ink">{message.sender}</div>
+            <div className="mt-0.5 truncate text-[12px] text-muted">{message.senderEmail}</div>
+          </div>
+          <div className="shrink-0 text-right text-[12px] text-muted">{message.time}</div>
+        </div>
+        {message.htmlBody ? (
+          <div className="mt-6 text-[14px] leading-6 text-text [&_a]:text-accent [&_a]:underline [&_li]:mb-1 [&_ol]:mb-4 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-4 [&_ul]:mb-4 [&_ul]:list-disc [&_ul]:pl-5" dangerouslySetInnerHTML={{ __html: message.htmlBody }} />
+        ) : (
+          <div className="mt-6 space-y-4 text-[14px] leading-6 text-text">
+            {message.body.length ? message.body.map((paragraph, index) => <p key={`${index}-${paragraph}`}>{paragraph}</p>) : <p className="text-muted">본문을 불러오는 중입니다.</p>}
+          </div>
+        )}
+        {message.attachments?.length ? (
+          <div className="mt-6 space-y-2">
+            {message.attachments.map((attachment) => (
+              <div key={`${attachment.name}-${attachment.size}`} className="flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-[12.5px] text-text">
+                <Icon name="paperclip" className="h-4 w-4 shrink-0 text-muted" />
+                <span className="min-w-0 flex-1 truncate">{attachment.name}</span>
+                <span className="shrink-0 text-muted">{attachment.size}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </article>
     </main>
   );
 }

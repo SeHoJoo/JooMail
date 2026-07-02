@@ -15,10 +15,21 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/microcosm-cc/bluemonday"
+	"golang.org/x/text/encoding/htmlindex"
+	"golang.org/x/text/transform"
 )
 
+const imapCommandTimeout = 10 * time.Second
+
+type deadlineReadWriteCloser interface {
+	io.ReadWriteCloser
+	SetDeadline(time.Time) error
+}
+
 type imapClient struct {
-	conn   io.ReadWriteCloser
+	conn   deadlineReadWriteCloser
 	reader *bufio.Reader
 	next   int
 }
@@ -46,6 +57,7 @@ func openIMAPSession(config Config, credential storedCredential) (*imapClient, e
 }
 
 func (c *imapClient) Close() error {
+	_ = c.conn.SetDeadline(time.Now().Add(imapCommandTimeout))
 	_, _ = c.command("LOGOUT")
 	return c.conn.Close()
 }
@@ -184,6 +196,8 @@ func (c *imapClient) fetchMessages(accountID string, mailboxID string, mailboxNa
 		}
 		message, err := parseRawMessage(accountID, mailboxID, uid, response.literal)
 		if err == nil {
+			message.Unread = !responseSeen(response.line)
+			message.Flagged = responseFlagged(response.line)
 			messages = append(messages, message)
 		}
 	}
@@ -193,6 +207,9 @@ func (c *imapClient) fetchMessages(accountID string, mailboxID string, mailboxNa
 func (c *imapClient) command(format string, args ...any) ([]imapResponse, error) {
 	c.next++
 	tag := fmt.Sprintf("A%03d", c.next)
+	if err := c.conn.SetDeadline(time.Now().Add(imapCommandTimeout)); err != nil {
+		return nil, err
+	}
 	if _, err := fmt.Fprintf(c.conn, tag+" "+format+"\r\n", args...); err != nil {
 		return nil, err
 	}
@@ -247,6 +264,14 @@ func parseUID(line string) string {
 		}
 	}
 	return ""
+}
+
+func responseSeen(line string) bool {
+	return strings.Contains(strings.ToUpper(line), `\SEEN`)
+}
+
+func responseFlagged(line string) bool {
+	return strings.Contains(strings.ToUpper(line), `\FLAGGED`)
 }
 
 func parseLastQuoted(line string) string {
@@ -354,7 +379,7 @@ func parseRawMessage(accountID string, mailboxID string, uid string, raw []byte)
 	subject := decodeHeader(header.Get("Subject"))
 	fromName, fromEmail := parseAddress(header.Get("From"))
 	date := header.Get("Date")
-	body, attachments := parseMessageBody(header, msg.Body)
+	body, htmlBody, attachments, remoteImagesBlocked := parseMessageBody(header, msg.Body)
 	snippet := ""
 	if len(body) > 0 {
 		snippet = strings.TrimSpace(body[0])
@@ -385,18 +410,22 @@ func parseRawMessage(accountID string, mailboxID string, uid string, raw []byte)
 			Date:    date,
 			Subject: subject,
 		},
-		TextBody:    body,
-		Attachments: attachments,
+		RemoteImagesBlocked: remoteImagesBlocked,
+		TextBody:            body,
+		HTMLBody:            htmlBody,
+		Attachments:         attachments,
 	}, nil
 }
 
-func parseMessageBody(header mail.Header, body io.Reader) ([]string, []Attachment) {
+func parseMessageBody(header mail.Header, body io.Reader) ([]string, string, []Attachment, bool) {
 	contentType := header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err == nil && strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
 		reader := multipart.NewReader(body, params["boundary"])
 		var text []string
+		var html []string
 		var attachments []Attachment
+		remoteImagesBlocked := false
 		for {
 			part, err := reader.NextPart()
 			if errors.Is(err, io.EOF) {
@@ -406,17 +435,25 @@ func parseMessageBody(header mail.Header, body io.Reader) ([]string, []Attachmen
 				break
 			}
 			partHeader := mail.Header(part.Header)
-			partText, partAttachments := parsePart(partHeader, part)
+			partText, partHTML, partAttachments, partRemoteImagesBlocked := parsePart(partHeader, part)
 			text = append(text, partText...)
+			if partHTML != "" {
+				html = append(html, partHTML)
+			}
 			attachments = append(attachments, partAttachments...)
+			remoteImagesBlocked = remoteImagesBlocked || partRemoteImagesBlocked
 		}
-		return text, attachments
+		return text, strings.Join(html, "\n"), attachments, remoteImagesBlocked
 	}
-	decoded := decodeTransfer(header.Get("Content-Transfer-Encoding"), body)
-	return splitParagraphs(string(decoded)), nil
+	decoded := decodePartBody(header, body)
+	if strings.EqualFold(mediaType, "text/html") {
+		html, remoteImagesBlocked := sanitizeMailHTML(string(decoded))
+		return nil, html, nil, remoteImagesBlocked
+	}
+	return splitParagraphs(string(decoded)), "", nil, false
 }
 
-func parsePart(header mail.Header, body io.Reader) ([]string, []Attachment) {
+func parsePart(header mail.Header, body io.Reader) ([]string, string, []Attachment, bool) {
 	contentType := header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err == nil && strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
@@ -427,18 +464,31 @@ func parsePart(header mail.Header, body io.Reader) ([]string, []Attachment) {
 	if filename == "" {
 		filename = params["name"]
 	}
-	decoded := decodeTransfer(header.Get("Content-Transfer-Encoding"), body)
+	decoded := decodePartBody(header, body)
 	if strings.EqualFold(disposition, "attachment") || filename != "" {
-		return nil, []Attachment{{
+		return nil, "", []Attachment{{
 			Name: decodeHeader(filename),
 			Size: formatBytes(len(decoded)),
 			Type: attachmentType(mediaType),
-		}}
+		}}, false
 	}
 	if strings.EqualFold(mediaType, "text/plain") || mediaType == "" {
-		return splitParagraphs(string(decoded)), nil
+		return splitParagraphs(string(decoded)), "", nil, false
 	}
-	return nil, nil
+	if strings.EqualFold(mediaType, "text/html") {
+		html, remoteImagesBlocked := sanitizeMailHTML(string(decoded))
+		return nil, html, nil, remoteImagesBlocked
+	}
+	return nil, "", nil, false
+}
+
+func decodePartBody(header mail.Header, body io.Reader) []byte {
+	decoded := decodeTransfer(header.Get("Content-Transfer-Encoding"), body)
+	_, params, err := mime.ParseMediaType(header.Get("Content-Type"))
+	if err != nil {
+		return decoded
+	}
+	return decodeCharset(params["charset"], decoded)
 }
 
 func decodeTransfer(encoding string, body io.Reader) []byte {
@@ -456,6 +506,36 @@ func decodeTransfer(encoding string, body io.Reader) []byte {
 	}
 	decoded, _ := io.ReadAll(body)
 	return decoded
+}
+
+func decodeCharset(name string, value []byte) []byte {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.EqualFold(name, "utf-8") || strings.EqualFold(name, "us-ascii") {
+		return value
+	}
+	encoding, err := htmlindex.Get(name)
+	if err != nil || encoding == nil {
+		return value
+	}
+	decoded, err := io.ReadAll(transform.NewReader(bytes.NewReader(value), encoding.NewDecoder()))
+	if err != nil {
+		return value
+	}
+	return decoded
+}
+
+func sanitizeMailHTML(value string) (string, bool) {
+	remoteImagesBlocked := hasRemoteImage(value)
+	policy := bluemonday.NewPolicy()
+	policy.AllowStandardURLs()
+	policy.AllowElements("a", "b", "blockquote", "br", "code", "div", "em", "hr", "i", "li", "ol", "p", "pre", "span", "strong", "table", "tbody", "td", "th", "thead", "tr", "u", "ul")
+	policy.AllowAttrs("href").OnElements("a")
+	return policy.Sanitize(value), remoteImagesBlocked
+}
+
+func hasRemoteImage(value string) bool {
+	lower := strings.ToLower(value)
+	return strings.Contains(lower, "<img") && (strings.Contains(lower, "src=\"http://") || strings.Contains(lower, "src=\"https://") || strings.Contains(lower, "src='http://") || strings.Contains(lower, "src='https://"))
 }
 
 func splitParagraphs(text string) []string {
@@ -488,11 +568,24 @@ func parseAddress(value string) (string, string) {
 }
 
 func decodeHeader(value string) string {
-	decoded, err := new(mime.WordDecoder).DecodeHeader(value)
+	decoder := mime.WordDecoder{CharsetReader: charsetReader}
+	decoded, err := decoder.DecodeHeader(value)
 	if err != nil {
 		return value
 	}
 	return decoded
+}
+
+func charsetReader(name string, input io.Reader) (io.Reader, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.EqualFold(name, "utf-8") || strings.EqualFold(name, "us-ascii") {
+		return input, nil
+	}
+	encoding, err := htmlindex.Get(name)
+	if err != nil || encoding == nil {
+		return input, nil
+	}
+	return transform.NewReader(input, encoding.NewDecoder()), nil
 }
 
 func shortMailTime(value string) string {
