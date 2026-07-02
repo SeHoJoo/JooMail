@@ -80,8 +80,8 @@ export function MobileInbox({ account, messages, selectedId, checkedIds, search,
             onClick={() => onSelectMessage(message.id)}
           >
             {selectedId === message.id ? <span className="absolute left-0 top-0 h-full w-0.5 bg-accent" /> : null}
-            {message.unread ? <span className={`absolute top-[30px] h-[7px] w-[7px] rounded-full bg-accent ${selecting ? "left-[50px]" : "left-[22px]"}`} /> : null}
-            {selecting ? (
+            {message.unread ? <span className="absolute left-[50px] top-[30px] h-[7px] w-[7px] rounded-full bg-accent" /> : null}
+            <span className={selecting ? "block" : "hidden"}>
               <input
                 aria-label={`${message.sender} 선택`}
                 className="absolute left-[18px] top-[39px] h-[15px] w-[15px] accent-accent"
@@ -90,19 +90,19 @@ export function MobileInbox({ account, messages, selectedId, checkedIds, search,
                 onChange={() => onToggleChecked(message.id)}
                 type="checkbox"
               />
-            ) : null}
-            <span className={`absolute top-2 flex h-11 w-11 items-center justify-center rounded-full bg-selected text-[13px] font-bold text-accent data-[muted=true]:bg-[#e6e8eb] data-[muted=true]:text-[#828891] ${selecting ? "left-[60px]" : "left-8"}`} data-muted={!message.unread}>
+            </span>
+            <span className="absolute left-[60px] top-2 flex h-11 w-11 items-center justify-center rounded-full bg-selected text-[13px] font-bold text-accent data-[muted=true]:bg-[#e6e8eb] data-[muted=true]:text-[#828891]" data-muted={!message.unread}>
               {message.initials}
             </span>
-            <span className={`absolute right-[84px] top-2 truncate text-[15px] text-ink data-[unread=true]:font-bold data-[unread=false]:font-semibold ${selecting ? "left-[108px]" : "left-20"}`} data-unread={message.unread}>
+            <span className="absolute left-[108px] right-[84px] top-2 truncate text-[15px] text-ink data-[unread=true]:font-bold data-[unread=false]:font-semibold" data-unread={message.unread}>
               {message.sender}
             </span>
             <span className="absolute right-6 top-2 text-[12.5px] data-[unread=true]:font-medium data-[unread=true]:text-accent data-[unread=false]:text-muted" data-unread={message.unread}>
               {message.time}
             </span>
-            <span className={`absolute right-12 top-8 truncate text-[13.5px] text-ink ${selecting ? "left-[108px]" : "left-20"}`}>{highlight(message.subject, search)}</span>
+            <span className="absolute left-[108px] right-12 top-8 truncate text-[13.5px] text-ink">{highlight(message.subject, search)}</span>
             {message.hasAttachment ? <Icon name="paperclip" className="absolute right-8 top-[33px] h-3.5 w-3.5 text-muted" /> : null}
-            <span className={`absolute right-6 top-[55px] truncate text-[12.5px] text-[#a2a8b0] ${selecting ? "left-[108px]" : "left-20"}`}>{highlight(message.snippet, search)}</span>
+            <span className="absolute left-[108px] right-6 top-[55px] truncate text-[12.5px] text-[#a2a8b0]">{highlight(message.snippet, search)}</span>
           </button>
           );
         }) : null}
