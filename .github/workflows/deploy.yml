@@ -26,6 +26,8 @@ jobs:
       JOOMAIL_BINARY_PATH: /opt/JooMail/bin/joomaild
       JOOMAIL_STATIC_PATH: /opt/JooMail/www
       JOOMAIL_SERVICE_NAME: joomail
+      JOOMAIL_SERVICE_USER: joomail
+      JOOMAIL_SERVICE_GROUP: joomail
 
     steps:
       - name: Checkout
@@ -67,8 +69,8 @@ jobs:
           ExecStart=/opt/JooMail/bin/joomaild
           Restart=always
           RestartSec=5
-          User=ubuntu
-          Group=ubuntu
+          User=joomail
+          Group=joomail
           NoNewPrivileges=true
           PrivateTmp=true
 
@@ -89,7 +91,7 @@ jobs:
           ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "set -eu
              sudo -n mkdir -p /opt/JooMail/bin /etc/joomail
-             sudo -n install -o ubuntu -g ubuntu -m 0755 /tmp/joomaild ${JOOMAIL_BINARY_PATH}.new
+             sudo -n install -o root -g root -m 0755 /tmp/joomaild ${JOOMAIL_BINARY_PATH}.new
              sudo -n mv ${JOOMAIL_BINARY_PATH}.new ${JOOMAIL_BINARY_PATH}
 
              rm -rf /tmp/joomail-www
@@ -98,16 +100,16 @@ jobs:
              sudo -n rm -rf ${JOOMAIL_STATIC_PATH}.new
              sudo -n mkdir -p ${JOOMAIL_STATIC_PATH}.new
              sudo -n cp -a /tmp/joomail-www/. ${JOOMAIL_STATIC_PATH}.new/
-             sudo -n chown -R ubuntu:ubuntu ${JOOMAIL_STATIC_PATH}.new
+             sudo -n chown -R ${JOOMAIL_SERVICE_USER}:${JOOMAIL_SERVICE_GROUP} ${JOOMAIL_STATIC_PATH}.new
              sudo -n rm -rf ${JOOMAIL_STATIC_PATH}.prev
              if [ -d ${JOOMAIL_STATIC_PATH} ]; then sudo -n mv ${JOOMAIL_STATIC_PATH} ${JOOMAIL_STATIC_PATH}.prev; fi
              sudo -n mv ${JOOMAIL_STATIC_PATH}.new ${JOOMAIL_STATIC_PATH}
 
              if [ ! -f /etc/joomail/backend.env ]; then
                printf 'JOOMAIL_ADDR=%s\nJOOMAIL_STATIC_DIR=%s\n' '${JOOMAIL_ADDR}' '${JOOMAIL_STATIC_PATH}' | sudo -n tee /etc/joomail/backend.env >/dev/null
-               sudo -n chown root:root /etc/joomail/backend.env
-               sudo -n chmod 0644 /etc/joomail/backend.env
              fi
+             sudo -n chown root:${JOOMAIL_SERVICE_GROUP} /etc/joomail/backend.env
+             sudo -n chmod 0640 /etc/joomail/backend.env
 
              sudo -n install -o root -g root -m 0644 /tmp/joomail.service /etc/systemd/system/${JOOMAIL_SERVICE_NAME}.service
              sudo -n systemctl daemon-reload
