@@ -6,25 +6,44 @@ type MessageRowProps = {
   selected: boolean;
   checked: boolean;
   search?: string;
-  onSelect: () => void;
+  metaLabel?: string;
+  onSelect: (options?: { shift: boolean; toggle: boolean }) => void;
   onToggleChecked: () => void;
   onToggleFlagged: () => void;
+  onArchive: () => Promise<void> | void;
+  onTrash: () => Promise<void> | void;
+  onMarkUnread: () => Promise<void> | void;
 };
 
 export function highlight(text: string, search = "") {
-  if (!search.trim()) return text;
-  const index = text.toLowerCase().indexOf(search.toLowerCase());
-  if (index === -1) return text;
-  return (
-    <>
-      {text.slice(0, index)}
-      <mark className="bg-[#ffeba0] px-0.5 text-text">{text.slice(index, index + search.length)}</mark>
-      {text.slice(index + search.length)}
-    </>
-  );
+  const query = search.trim();
+  if (!query) return text;
+  const lowerText = text.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  let matchIndex = lowerText.indexOf(lowerQuery);
+  while (matchIndex !== -1) {
+    if (matchIndex > cursor) parts.push(text.slice(cursor, matchIndex));
+    const end = matchIndex + query.length;
+    parts.push(
+      <mark key={`${matchIndex}-${end}`} className="bg-[#ffeba0] px-0.5 text-text">
+        {text.slice(matchIndex, end)}
+      </mark>,
+    );
+    cursor = end;
+    matchIndex = lowerText.indexOf(lowerQuery, cursor);
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts.length ? <>{parts}</> : text;
 }
 
-export function MessageRow({ message, selected, checked, search, onSelect, onToggleChecked, onToggleFlagged }: MessageRowProps) {
+export function MessageRow({ message, selected, checked, search, metaLabel, onSelect, onToggleChecked, onToggleFlagged, onArchive, onTrash, onMarkUnread }: MessageRowProps) {
+  function runRowAction(event: React.MouseEvent<HTMLButtonElement>, action: () => Promise<void> | void) {
+    event.stopPropagation();
+    Promise.resolve(action()).catch(() => undefined);
+  }
+
   return (
     <div
       className={[
@@ -36,8 +55,10 @@ export function MessageRow({ message, selected, checked, search, onSelect, onTog
       data-message-id={message.id}
       data-message-row
       data-selected={selected}
-      onClick={onSelect}
-      onFocus={onSelect}
+      onClick={(event) => onSelect({ shift: event.shiftKey, toggle: event.metaKey || event.ctrlKey })}
+      onFocus={(event) => {
+        if (event.target === event.currentTarget) onSelect();
+      }}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
@@ -70,8 +91,20 @@ export function MessageRow({ message, selected, checked, search, onSelect, onTog
       <span className="absolute left-[82px] right-[50px] top-[29px] truncate text-[12.5px] leading-[15px] text-[#17191c] data-[unread=false]:text-[#5b6169]" data-unread={message.unread}>
         {highlight(message.subject, search)}
       </span>
-      <span className="absolute left-[82px] right-[50px] top-[46px] truncate text-[11.5px] leading-[15px] text-[#a2a8b0]">{highlight(message.snippet, search)}</span>
+      <span className={["absolute left-[82px] top-[46px] truncate text-[11.5px] leading-[15px] text-[#a2a8b0]", metaLabel ? "right-[112px]" : "right-[50px]"].join(" ")}>{highlight(message.snippet, search)}</span>
+      {metaLabel ? <span className="absolute right-3 top-[46px] max-w-[86px] truncate rounded bg-[#f2f3f5] px-1.5 py-0.5 text-[10.5px] leading-3 text-muted">{metaLabel}</span> : null}
       {message.hasAttachment ? <Icon name="paperclip" className="absolute right-[52px] top-[30px] h-[13px] w-[13px] text-muted" /> : null}
+      <div className="absolute right-2 top-[23px] z-10 hidden h-[24px] items-center rounded-md border border-line bg-white shadow-sm group-hover:flex group-focus-within:flex">
+        <button className="flex h-[22px] w-[24px] items-center justify-center rounded-l-md hover:bg-[#eef1f5]" aria-label="보관" onClick={(event) => runRowAction(event, onArchive)} type="button">
+          <Icon name="archive" className="h-[13px] w-[13px] text-muted" />
+        </button>
+        <button className="flex h-[22px] w-[24px] items-center justify-center hover:bg-[#eef1f5]" aria-label="삭제" onClick={(event) => runRowAction(event, onTrash)} type="button">
+          <Icon name="trash" className="h-[13px] w-[13px] text-muted" />
+        </button>
+        <button className="flex h-[22px] w-[24px] items-center justify-center rounded-r-md hover:bg-[#eef1f5]" aria-label="읽지 않음으로 표시" onClick={(event) => runRowAction(event, onMarkUnread)} type="button">
+          <Icon name="mail" className="h-[13px] w-[13px] text-muted" />
+        </button>
+      </div>
       <button
         className={[
           "absolute right-[27px] top-[26px] flex h-[21px] w-[21px] items-center justify-center rounded-md hover:bg-[#eef1f5]",

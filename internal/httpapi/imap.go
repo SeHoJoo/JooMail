@@ -455,12 +455,23 @@ func (c *imapClient) searchMailbox(mailboxName string, query string) ([]string, 
 	} else if taggedStatus(responses) != "OK" {
 		return nil, errors.New("select failed")
 	}
-	responses, err := c.command("UID SEARCH %s", searchCriteria(query))
+	criteria := searchCriteria(query)
+	responses, err := c.command("UID SEARCH %s", criteria)
 	if err != nil {
 		return nil, err
 	}
 	if taggedStatus(responses) != "OK" {
-		return nil, errors.New("search failed")
+		fallbackCriteria, ok := searchCriteriaWithoutCharset(criteria)
+		if !ok {
+			return nil, errors.New("search failed")
+		}
+		responses, err = c.command("UID SEARCH %s", fallbackCriteria)
+		if err != nil {
+			return nil, err
+		}
+		if taggedStatus(responses) != "OK" {
+			return nil, errors.New("search failed")
+		}
 	}
 	var uids []int
 	for _, response := range responses {
@@ -492,6 +503,14 @@ func searchCriteria(query string) string {
 		return criterion
 	}
 	return "CHARSET UTF-8 " + criterion
+}
+
+func searchCriteriaWithoutCharset(criteria string) (string, bool) {
+	fallback, ok := strings.CutPrefix(criteria, "CHARSET UTF-8 ")
+	if !ok {
+		return "", false
+	}
+	return fallback, true
 }
 
 func isASCII(value string) bool {
@@ -1183,11 +1202,7 @@ func parseRelatedPart(header mail.Header, body io.Reader, counter *int, inlineIm
 		}
 		return text, strings.Join(html, "\n"), attachments
 	}
-	disposition, dispositionParams, _ := mime.ParseMediaType(header.Get("Content-Disposition"))
-	filename := dispositionParams["filename"]
-	if filename == "" {
-		filename = params["name"]
-	}
+	disposition, filename := attachmentDispositionAndFilename(header, params)
 	decoded := decodePartBody(header, body)
 	if isInlineCIDImage(header, mediaType, disposition) {
 		inlineImages[normalizeContentID(header.Get("Content-ID"))] = inlineImage{mediaType: mediaType, data: decoded}
@@ -1218,11 +1233,7 @@ func parsePart(header mail.Header, body io.Reader, counter *int) ([]string, stri
 	if err == nil && strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
 		return parseMessageBodyWithCounter(header, body, counter)
 	}
-	disposition, dispositionParams, _ := mime.ParseMediaType(header.Get("Content-Disposition"))
-	filename := dispositionParams["filename"]
-	if filename == "" {
-		filename = params["name"]
-	}
+	disposition, filename := attachmentDispositionAndFilename(header, params)
 	decoded := decodePartBody(header, body)
 	if isInlineCIDImage(header, mediaType, disposition) {
 		return nil, "", nil, false
@@ -1279,11 +1290,7 @@ func findAttachmentPayload(header mail.Header, body io.Reader, attachmentID stri
 		}
 		return AttachmentPayload{}, ErrNotFound
 	}
-	disposition, dispositionParams, _ := mime.ParseMediaType(header.Get("Content-Disposition"))
-	filename := dispositionParams["filename"]
-	if filename == "" {
-		filename = params["name"]
-	}
+	disposition, filename := attachmentDispositionAndFilename(header, params)
 	if !strings.EqualFold(disposition, "attachment") && filename == "" {
 		_, _ = io.Copy(io.Discard, body)
 		return AttachmentPayload{}, ErrNotFound
@@ -1306,6 +1313,22 @@ func findAttachmentPayload(header mail.Header, body io.Reader, attachmentID stri
 		ContentType: mediaType,
 		Data:        decoded,
 	}, nil
+}
+
+func attachmentDispositionAndFilename(header mail.Header, contentTypeParams map[string]string) (string, string) {
+	rawDisposition := strings.TrimSpace(header.Get("Content-Disposition"))
+	disposition, dispositionParams, err := mime.ParseMediaType(rawDisposition)
+	if err != nil && strings.HasPrefix(strings.ToLower(rawDisposition), "attachment") {
+		disposition = "attachment"
+	}
+	filename := dispositionParams["filename"]
+	if filename == "" {
+		filename = contentTypeParams["name"]
+	}
+	if strings.EqualFold(disposition, "attachment") && filename == "" {
+		filename = "attachment"
+	}
+	return disposition, filename
 }
 
 func decodePartBody(header mail.Header, body io.Reader) []byte {

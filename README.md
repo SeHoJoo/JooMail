@@ -13,14 +13,26 @@ Set `JOOMAIL_STATIC_DIR` to serve the built frontend from the same process.
 
 The product API is backed by live IMAP/SMTP data. Configure the mail server and session settings with environment variables such as:
 
-- `JOOMAIL_IMAP_HOST`, `JOOMAIL_IMAP_PORT`, `JOOMAIL_IMAP_TLS`, `JOOMAIL_IMAP_USER_FORMAT`
-- `JOOMAIL_SMTP_HOST`, `JOOMAIL_SMTP_PORT`, `JOOMAIL_SMTP_TLS`, `JOOMAIL_SMTP_STARTTLS`, `JOOMAIL_SMTP_USER_FORMAT`
-- `JOOMAIL_LOGIN_DOMAIN`
-- `JOOMAIL_SESSION_SECRET`, `JOOMAIL_CREDENTIAL_KEY`, `JOOMAIL_CREDENTIAL_DIR`
+- `JOOMAIL_IMAP_HOST`, `JOOMAIL_IMAP_PORT`: required IMAP endpoint.
+- `JOOMAIL_IMAP_TLS`: optional implicit TLS toggle for IMAP connections.
+- `JOOMAIL_IMAP_USER_FORMAT`: optional login username mapping. The current backend supports the configured server pattern; do not add account systems outside IMAP LOGIN in this phase.
+- `JOOMAIL_SMTP_HOST`, `JOOMAIL_SMTP_PORT`: required SMTP endpoint for send.
+- `JOOMAIL_SMTP_TLS`: optional implicit TLS toggle for SMTP. Port `465` also uses implicit TLS.
+- `JOOMAIL_SMTP_STARTTLS`: optional STARTTLS upgrade for non-implicit SMTP connections.
+- `JOOMAIL_SMTP_USER_FORMAT`: optional SMTP username mapping. Current send support expects the approved localpart mode.
+- `JOOMAIL_LOGIN_DOMAIN`: optional domain appended during login flows when applicable.
+- `JOOMAIL_SESSION_SECRET`: required HMAC signing secret for session cookies.
+- `JOOMAIL_CREDENTIAL_KEY`: required local encryption key for stored session credentials.
+- `JOOMAIL_CREDENTIAL_DIR`: required local directory for encrypted per-session credential files.
+
+Credential files are created after successful IMAP login so the API can open
+live IMAP/SMTP sessions for that browser session. Logout deletes the stored
+credential and expires the session cookie. Do not commit credential files,
+keys, secrets, or environment values.
 
 Initial API endpoints:
 
-- `GET /api/health`
+- `GET /api/health` returns `{"status":"ok"}` for smoke checks.
 - `POST /api/login`
 - `POST /api/logout`
 - `GET /api/accounts`
@@ -32,6 +44,29 @@ Initial API endpoints:
 - `POST /api/messages/{messageID}/move`
 - `POST /api/send`
 
+`POST /api/send` trims To/Cc/Bcc recipients and rejects missing or malformed
+addresses with `400` before opening an SMTP connection. Bcc recipients are used
+for SMTP delivery but are not written to outgoing message headers.
+Send requests are capped at 32 MiB. SMTP auth, recipient, DATA, and Sent append
+failures return the generic `502 failed to send message` response. A Sent append
+failure currently fails the API response after SMTP delivery instead of adding a
+new warning field to the response contract.
+
+Message list responses currently return the newest 50 live IMAP matches. Future
+load-more support should extend this route with optional query parameters such
+as `limit` plus a UID/date cursor, while keeping the existing `messages` JSON
+field stable for current clients. Account-scope search remains limited to the
+current account, searches each selectable mailbox live through IMAP, caps each
+mailbox fetch, and caps the merged result after sorting.
+
+Non-ASCII search terms are sent with `CHARSET UTF-8` first. If the IMAP server
+rejects that charset search, JooMail retries the same `TEXT` search without the
+charset prefix before returning a search failure.
+
+Message move uses IMAP `UID MOVE` when the server supports it. If `MOVE` is not
+accepted, JooMail falls back to `UID COPY`, `UID STORE +FLAGS.SILENT
+(\Deleted)`, and `EXPUNGE` on the selected source mailbox.
+
 ## Deploy
 
 Deployment uses the self-hosted GitHub Actions runner and follows the PillowCare
@@ -40,8 +75,8 @@ server pattern.
 Deploy manually from GitHub Actions, or push a release tag:
 
 ```sh
-git tag joomail-v0.1.0
-git push origin joomail-v0.1.0
+git tag joomail-v0.1.10
+git push origin joomail-v0.1.10
 ```
 
 The workflow builds the Vite frontend, builds the Go backend, installs artifacts

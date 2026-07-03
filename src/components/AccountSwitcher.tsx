@@ -12,7 +12,10 @@ type AccountSwitcherProps = {
 
 export function AccountSwitcher({ accounts, selectedAccount, onSelectAccount, onAddAccount, onLogout }: AccountSwitcherProps) {
   const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(() => Math.max(0, accounts.findIndex((account) => account.id === selectedAccount.id)));
   const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const selectedIndex = Math.max(0, accounts.findIndex((account) => account.id === selectedAccount.id));
 
   useEffect(() => {
     if (!open) return;
@@ -35,6 +38,29 @@ export function AccountSwitcher({ accounts, selectedAccount, onSelectAccount, on
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+    setActiveIndex(selectedIndex);
+    window.requestAnimationFrame(() => focusAccountButton(selectedIndex));
+  }, [open, selectedIndex]);
+
+  function focusAccountButton(index: number) {
+    menuRef.current?.querySelector<HTMLButtonElement>(`[data-account-index="${index}"]`)?.focus();
+  }
+
+  function moveActive(delta: number) {
+    const nextIndex = (activeIndex + delta + accounts.length) % accounts.length;
+    setActiveIndex(nextIndex);
+    focusAccountButton(nextIndex);
+  }
+
+  function selectActiveAccount() {
+    const account = accounts[activeIndex];
+    if (!account) return;
+    onSelectAccount(account.id);
+    setOpen(false);
+  }
+
   return (
     <div className="relative border-b border-line" ref={rootRef}>
       <button
@@ -42,6 +68,12 @@ export function AccountSwitcher({ accounts, selectedAccount, onSelectAccount, on
         aria-label="계정 선택"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
         type="button"
       >
         <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-accent text-[12px] font-bold text-white">
@@ -55,11 +87,49 @@ export function AccountSwitcher({ accounts, selectedAccount, onSelectAccount, on
       </button>
 
       {open ? (
-        <div className="absolute left-full top-2 z-40 ml-2 w-[272px] rounded-lg border border-line bg-white py-1 text-[12.5px] text-text shadow-compose">
-          {accounts.map((account) => (
+        <div
+          className="absolute left-full top-2 z-40 ml-2 w-[272px] rounded-lg border border-line bg-white py-1 text-[12.5px] text-text shadow-compose"
+          ref={menuRef}
+          role="listbox"
+          aria-label="계정 목록"
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              moveActive(1);
+              return;
+            }
+            if (event.key === "ArrowUp") {
+              event.preventDefault();
+              moveActive(-1);
+              return;
+            }
+            if (event.key === "Home") {
+              event.preventDefault();
+              setActiveIndex(0);
+              focusAccountButton(0);
+              return;
+            }
+            if (event.key === "End") {
+              event.preventDefault();
+              const lastIndex = accounts.length - 1;
+              setActiveIndex(lastIndex);
+              focusAccountButton(lastIndex);
+              return;
+            }
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              selectActiveAccount();
+            }
+          }}
+        >
+          {accounts.map((account, index) => (
             <button
               key={account.id}
               className={["flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[#f6f7f8]", account.id === selectedAccount.id ? "bg-selected text-accent" : ""].join(" ")}
+              data-account-index={index}
+              role="option"
+              aria-selected={account.id === selectedAccount.id}
+              onFocus={() => setActiveIndex(index)}
               onClick={() => {
                 onSelectAccount(account.id);
                 setOpen(false);

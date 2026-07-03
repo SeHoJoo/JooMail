@@ -17,7 +17,27 @@ const REMOTE_IMAGES_KEY = "joomail:remote-images";
 const ACCOUNT_NAMES_KEY = "joomail:account-names";
 const MAIL_STATE_KEY = "joomail:mail-state";
 const DEFAULT_LIST_WIDTH = 388;
-const QA_STATES: QaState[] = ["normal", "loading", "error", "empty", "empty-reading", "search", "search-empty", "multiselect", "compose"];
+const SEARCH_DEBOUNCE_MS = 300;
+const QA_STATES: QaState[] = [
+  "normal",
+  "loading",
+  "error",
+  "empty",
+  "empty-reading",
+  "search",
+  "search-account",
+  "search-empty",
+  "multiselect",
+  "compose",
+  "remote-images-shown",
+  "quoted-expanded",
+  "long-overflow",
+  "many-attachments",
+  "empty-custom-folder",
+  "nested-tree",
+  "mobile-reading-attachments",
+  "compose-cc-bcc",
+];
 const SEARCH_QA_QUERY = "MIME";
 const SEARCH_EMPTY_QA_QUERY = "qa-no-results-000";
 
@@ -77,10 +97,13 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   const [mailboxId, setMailboxId] = useState(initialMailboxId);
   const [selectedMessageId, setSelectedMessageId] = useState(useApi ? restoredMailState.byAccount[initialAccountId]?.messageId ?? "" : restoredMailState.byAccount[initialAccountId]?.messageId ?? "m1");
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [lastCheckedId, setLastCheckedId] = useState("");
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [searchScope, setSearchScope] = useState<SearchScope>(restoredMailState.searchScope);
   const [mailStateByAccount, setMailStateByAccount] = useState<Record<string, AccountMailState>>(restoredMailState.byAccount);
   const [composeOpen, setComposeOpen] = useState(false);
+  const [composeDirty, setComposeDirty] = useState(false);
   const [replyMessageId, setReplyMessageId] = useState<string | null>(null);
   const [composeMode, setComposeMode] = useState<ComposeMode>("compose");
   const [mode, setMode] = useState<MockMode>("normal");
@@ -93,8 +116,13 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   const [accountNames, setAccountNames] = useState<Record<string, string>>(() => loadAccountNames());
   const [showRemoteImagesByDefault, setShowRemoteImagesByDefault] = useState(() => localStorage.getItem(REMOTE_IMAGES_KEY) === "true");
   const [forceEmptyList, setForceEmptyList] = useState(false);
+  const [forceMobileReadingId, setForceMobileReadingId] = useState("");
+  const [forceMobileFolderOpen, setForceMobileFolderOpen] = useState(false);
+  const [forceQuotedOpen, setForceQuotedOpen] = useState(false);
+  const [forceComposeCcBcc, setForceComposeCcBcc] = useState(false);
   const shellRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const composeDirtyRef = useRef(false);
   const initialQaAppliedRef = useRef(false);
 
   const displayAccounts = useMemo(() => accounts.map((account) => withDisplayName(account, accountNames[account.email])), [accounts, accountNames]);
@@ -216,6 +244,35 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   }, [selectedMessageId, visibleMessages]);
 
   useEffect(() => {
+    if (searchInput === search) return;
+    if (!searchInput.trim()) {
+      setSearch("");
+      return;
+    }
+    const timer = window.setTimeout(() => setSearch(searchInput), SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [search, searchInput]);
+
+  useEffect(() => {
+    composeDirtyRef.current = composeDirty;
+  }, [composeDirty]);
+
+  useEffect(() => {
+    if (!composeOpen) return;
+    const marker = { ...(window.history.state ?? {}), joomailCompose: true };
+    window.history.pushState(marker, "", window.location.href);
+
+    function handlePopState() {
+      if (!closeCompose()) {
+        window.history.pushState(marker, "", window.location.href);
+      }
+    }
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [composeOpen]);
+
+  useEffect(() => {
     if (initialQaAppliedRef.current) return;
     initialQaAppliedRef.current = true;
 
@@ -257,12 +314,12 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
       if (event.key === "Escape") {
         if (checkedIds.size > 0) {
           event.preventDefault();
-          setCheckedIds(new Set());
+          clearChecked();
           return;
         }
         if (search) {
           event.preventDefault();
-          setSearch("");
+          handleSearch("");
         }
         return;
       }
@@ -317,33 +374,90 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     const searchMessages = accountMessages.filter((message) =>
       [message.sender, message.subject, message.snippet, ...message.body].some((field) => field.toLowerCase().includes(SEARCH_QA_QUERY.toLowerCase())),
     );
+    const longOverflowId = accountMessages.find((message) => message.id === "qa-long-overflow")?.id ?? firstInboxId;
+    const manyAttachmentsId = accountMessages.find((message) => message.id === "qa-many-attachments")?.id ?? firstInboxId;
+    const quotedId = accountMessages.find((message) => message.id === "qa-quoted")?.id ?? firstInboxId;
 
     setForceEmptyList(nextState === "empty");
+    setForceMobileReadingId("");
+    setForceMobileFolderOpen(false);
+    setForceQuotedOpen(false);
+    setForceComposeCcBcc(false);
     setMode(nextState === "loading" || nextState === "error" ? nextState : "normal");
     setMailboxId("inbox");
+    setSearchInput("");
     setSearch("");
     setSearchScope("mailbox");
     setCheckedIds(new Set());
+    setLastCheckedId("");
     setReplyMessageId(null);
     setComposeMode("compose");
-    setComposeOpen(nextState === "compose");
+    setComposeOpen(nextState === "compose" || nextState === "compose-cc-bcc");
     setSelectedMessageId(firstInboxId);
+    setShowRemoteImagesByDefault(nextState === "remote-images-shown");
 
     if (nextState === "empty" || nextState === "empty-reading" || nextState === "search-empty") {
       setSelectedMessageId("");
     }
 
     if (nextState === "search") {
+      setSearchInput(SEARCH_QA_QUERY);
       setSearch(SEARCH_QA_QUERY);
       setSelectedMessageId(searchMessages[0]?.id ?? "");
     }
 
+    if (nextState === "search-account") {
+      setSearchInput(SEARCH_QA_QUERY);
+      setSearch(SEARCH_QA_QUERY);
+      setSearchScope("account");
+      setSelectedMessageId(searchMessages[0]?.id ?? "");
+    }
+
     if (nextState === "search-empty") {
+      setSearchInput(SEARCH_EMPTY_QA_QUERY);
       setSearch(SEARCH_EMPTY_QA_QUERY);
     }
 
     if (nextState === "multiselect") {
       setCheckedIds(new Set(inboxMessages.slice(0, 3).map((message) => message.id)));
+      setLastCheckedId(inboxMessages[2]?.id ?? "");
+    }
+
+    if (nextState === "remote-images-shown") {
+      setSelectedMessageId(firstInboxId);
+    }
+
+    if (nextState === "quoted-expanded") {
+      setSelectedMessageId(quotedId);
+      setForceQuotedOpen(true);
+    }
+
+    if (nextState === "long-overflow") {
+      setSelectedMessageId(longOverflowId);
+    }
+
+    if (nextState === "many-attachments") {
+      setSelectedMessageId(manyAttachmentsId);
+    }
+
+    if (nextState === "empty-custom-folder") {
+      setMailboxId("clients");
+      setSelectedMessageId("");
+    }
+
+    if (nextState === "nested-tree") {
+      setMailboxId("clients");
+      setSelectedMessageId("");
+      setForceMobileFolderOpen(true);
+    }
+
+    if (nextState === "mobile-reading-attachments") {
+      setSelectedMessageId(manyAttachmentsId);
+      setForceMobileReadingId(manyAttachmentsId);
+    }
+
+    if (nextState === "compose-cc-bcc") {
+      setForceComposeCcBcc(true);
     }
   }
 
@@ -354,7 +468,9 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     setSelectedMessageId(restored?.messageId ?? "");
     setForceEmptyList(false);
     setCheckedIds(new Set());
+    setLastCheckedId("");
     if (useApi) {
+      setSearchInput("");
       setSearch("");
       return;
     }
@@ -365,9 +481,11 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     const nextMailbox = flatMailboxes.find((mailbox) => mailbox.id === nextMailboxId);
     if (nextMailbox?.selectable === false) return;
     setMailboxId(nextMailboxId);
+    setSearchInput("");
     setSearch("");
     setForceEmptyList(false);
     setCheckedIds(new Set());
+    setLastCheckedId("");
     const restored = mailStateByAccount[accountId];
     const restoredMessageId = restored?.mailboxId === nextMailboxId ? restored.messageId : "";
     if (useApi) {
@@ -396,7 +514,12 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
 
   function handleSearch(nextSearch: string) {
     setForceEmptyList(false);
-    setSearch(nextSearch);
+    setSearchInput(nextSearch);
+    if (!nextSearch.trim()) {
+      setSearch("");
+      setSearchScope("mailbox");
+      clearChecked();
+    }
   }
 
   function handleSearchScope(nextScope: SearchScope) {
@@ -407,6 +530,8 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   function openCompose() {
     setReplyMessageId(null);
     setComposeMode("compose");
+    setComposeDirty(false);
+    composeDirtyRef.current = false;
     setComposeOpen(true);
   }
 
@@ -414,13 +539,26 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     if (!messageId) return;
     setReplyMessageId(messageId);
     setComposeMode(mode);
+    setComposeDirty(false);
+    composeDirtyRef.current = false;
     setComposeOpen(true);
   }
 
-  function closeCompose() {
+  function closeCompose(options?: { force?: boolean }) {
+    if (!options?.force && composeDirtyRef.current && !window.confirm("작성 중인 내용을 버리고 닫을까요?")) {
+      return false;
+    }
     setComposeOpen(false);
     setReplyMessageId(null);
     setComposeMode("compose");
+    setComposeDirty(false);
+    composeDirtyRef.current = false;
+    return true;
+  }
+
+  function updateComposeDirty(dirty: boolean) {
+    composeDirtyRef.current = dirty;
+    setComposeDirty(dirty);
   }
 
   async function sendDraft(draft: ComposeDraft) {
@@ -495,8 +633,10 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
       setSelectedMessageId("");
       setSelectedMessageDetail(undefined);
       setApiMessages([]);
+      setSearchInput("");
       setSearch("");
       setCheckedIds(new Set());
+      setLastCheckedId("");
       setReloadToken((token) => token + 1);
       setAddAccountOpen(false);
     } catch (error) {
@@ -504,7 +644,37 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     }
   }
 
+  function selectMessage(id: string, options?: { shift: boolean; toggle: boolean }) {
+    if (options?.shift) {
+      selectMessageRange(id);
+      return;
+    }
+    if (options?.toggle) {
+      toggleChecked(id);
+      setSelectedMessageId(id);
+      return;
+    }
+    setSelectedMessageId(id);
+  }
+
+  function selectMessageRange(id: string) {
+    const anchorId = lastCheckedId || selectedMessageId || visibleMessages[0]?.id;
+    const anchorIndex = visibleMessages.findIndex((message) => message.id === anchorId);
+    const targetIndex = visibleMessages.findIndex((message) => message.id === id);
+    if (anchorIndex === -1 || targetIndex === -1) {
+      toggleChecked(id);
+      setSelectedMessageId(id);
+      return;
+    }
+    const from = Math.min(anchorIndex, targetIndex);
+    const to = Math.max(anchorIndex, targetIndex);
+    setCheckedIds((current) => new Set([...current, ...visibleMessages.slice(from, to + 1).map((message) => message.id)]));
+    setLastCheckedId(id);
+    setSelectedMessageId(id);
+  }
+
   function toggleChecked(id: string) {
+    setLastCheckedId(id);
     setCheckedIds((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
@@ -521,10 +691,17 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
       if (allChecked) {
         const next = new Set(current);
         visibleIds.forEach((id) => next.delete(id));
+        setLastCheckedId("");
         return next;
       }
+      setLastCheckedId(visibleIds[visibleIds.length - 1] ?? "");
       return new Set([...current, ...visibleIds]);
     });
+  }
+
+  function clearChecked() {
+    setCheckedIds(new Set());
+    setLastCheckedId("");
   }
 
   async function toggleFlagged(message: Message) {
@@ -608,7 +785,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     const selectedMessages = visibleMessages.filter((message) => checkedIds.has(message.id));
     if (!selectedMessages.length) return;
     if (!useApi) {
-      setCheckedIds(new Set());
+      clearChecked();
       setSelectedMessageId("");
       return;
     }
@@ -666,9 +843,12 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         selectedMailboxId={mailboxId}
         checkedIds={checkedIds}
         search={search}
+        searchInput={searchInput}
         searchScope={searchScope}
         mode={mode}
         showRemoteImagesByDefault={showRemoteImagesByDefault}
+        forceReadingId={forceMobileReadingId}
+        folderMenuOpenByDefault={forceMobileFolderOpen}
         onRetry={retry}
         onCompose={openCompose}
         onReply={(messageId) => openReply("reply", messageId)}
@@ -678,13 +858,13 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         onSelectMailbox={selectMailbox}
         onToggleChecked={toggleChecked}
         onToggleFlagged={toggleFlagged}
-        onClearChecked={() => setCheckedIds(new Set())}
+        onClearChecked={clearChecked}
         onBulkArchive={() => bulkMoveToKind("archive")}
         onBulkTrash={() => bulkMoveToKind("trash")}
         onLogout={useApi ? logout : undefined}
       />
       <div className="hidden h-screen flex-col md:flex">
-        <Toolbar search={search} searchInputRef={searchInputRef} onSearch={handleSearch} onRefresh={retry} onSettings={() => setSettingsOpen(true)} />
+        <Toolbar search={searchInput} searchInputRef={searchInputRef} onSearch={handleSearch} onRefresh={retry} onSettings={() => setSettingsOpen(true)} />
         <div className="min-h-0 flex flex-1">
           <Sidebar
             accounts={displayAccounts}
@@ -708,14 +888,17 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
             mode={mode}
             onRetry={retry}
             onSearchScopeChange={handleSearchScope}
-            onSelectMessage={setSelectedMessageId}
+            onSelectMessage={selectMessage}
             onToggleAllChecked={toggleAllChecked}
             onToggleChecked={toggleChecked}
             onToggleFlagged={toggleFlagged}
+            onArchive={(message) => moveToKind(message, "archive")}
+            onTrash={(message) => moveToKind(message, "trash")}
+            onMarkUnread={markUnread}
             onBulkArchive={() => bulkMoveToKind("archive")}
             onBulkTrash={() => bulkMoveToKind("trash")}
             onBulkMove={bulkMoveMessages}
-            onClearChecked={() => setCheckedIds(new Set())}
+            onClearChecked={clearChecked}
           />
           <div className="hidden w-1 cursor-col-resize bg-white hover:bg-selected md:block" onPointerDown={startResize} aria-label="리스트 폭 조절" />
           <ReadingPane
@@ -723,6 +906,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
             mode={mode}
             mailboxes={flatMailboxes}
             showRemoteImagesByDefault={showRemoteImagesByDefault}
+            quotedOpenByDefault={forceQuotedOpen}
             onRetry={retry}
             onReply={() => openReply("reply")}
             onReplyAll={() => openReply("replyAll")}
@@ -747,7 +931,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         />
       ) : null}
       {addAccountOpen ? <AddAccountModal onClose={() => setAddAccountOpen(false)} onAdded={refreshAccounts} /> : null}
-      {composeOpen ? <ComposePanel accounts={displayAccounts} account={selectedAccount} mode={composeMode} message={composeMessage} onClose={closeCompose} onSend={useApi ? sendDraft : undefined} /> : null}
+      {composeOpen ? <ComposePanel accounts={displayAccounts} account={selectedAccount} mode={composeMode} message={composeMessage} ccBccOpenByDefault={forceComposeCcBcc} onDirtyChange={updateComposeDirty} onClose={closeCompose} onSend={useApi ? sendDraft : undefined} /> : null}
       {import.meta.env.DEV && !composeOpen ? <DevStateSwitcher states={QA_STATES} onApply={applyQaState} /> : null}
     </div>
   );

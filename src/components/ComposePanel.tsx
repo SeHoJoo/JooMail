@@ -7,27 +7,24 @@ type ComposePanelProps = {
   account: Account;
   mode: ComposeMode;
   message?: Message;
-  onClose: () => void;
+  ccBccOpenByDefault?: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
+  onClose: (options?: { force?: boolean }) => void;
   onSend?: (draft: ComposeDraft) => Promise<void>;
 };
 
-type MockAttachment = {
-  name: string;
-  size: string;
-};
-
-export function ComposePanel({ accounts, account, mode, message, onClose, onSend }: ComposePanelProps) {
+export function ComposePanel({ accounts, account, mode, message, ccBccOpenByDefault = false, onDirtyChange, onClose, onSend }: ComposePanelProps) {
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [initialDraft, setInitialDraft] = useState(() => composeInitialState(mode, message, account.email));
   const [fromAccountId, setFromAccountId] = useState(account.id);
   const [fromMenuOpen, setFromMenuOpen] = useState(false);
-  const [showCcBcc, setShowCcBcc] = useState(false);
+  const [showCcBcc, setShowCcBcc] = useState(ccBccOpenByDefault);
   const [recipientText, setRecipientText] = useState(() => composeInitialState(mode, message, account.email).to);
   const [ccText, setCcText] = useState(() => composeInitialState(mode, message, account.email).cc);
   const [bccText, setBccText] = useState("");
   const [subject, setSubject] = useState(() => composeInitialState(mode, message, account.email).subject);
   const [body, setBody] = useState(() => composeInitialState(mode, message, account.email).body);
-  const [attachments, setAttachments] = useState<MockAttachment[]>([]);
   const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [sendError, setSendError] = useState("");
   const [draftNotice, setDraftNotice] = useState("");
@@ -35,6 +32,17 @@ export function ComposePanel({ accounts, account, mode, message, onClose, onSend
   const [minimized, setMinimized] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const fromAccount = accounts.find((item) => item.id === fromAccountId) ?? account;
+  const attachments = attachmentFiles.map((file) => ({ name: file.name, size: formatFileSize(file.size) }));
+  const attachmentTotal = totalFileSize(attachmentFiles);
+  const sendDisabledReason = requiredFieldsMessage(recipientText || message?.senderEmail || "", subject);
+  const dirty =
+    fromAccountId !== account.id ||
+    recipientText !== initialDraft.to ||
+    ccText !== initialDraft.cc ||
+    bccText.trim() !== "" ||
+    subject !== initialDraft.subject ||
+    body !== initialDraft.body ||
+    attachmentFiles.length > 0;
 
   useEffect(() => {
     bodyRef.current?.focus();
@@ -45,30 +53,42 @@ export function ComposePanel({ accounts, account, mode, message, onClose, onSend
   }, [account.id]);
 
   useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(() => {
     const initial = composeInitialState(mode, message, account.email);
+    setInitialDraft(initial);
     setRecipientText(initial.to);
     setCcText(initial.cc);
     setBccText("");
-    setShowCcBcc(Boolean(initial.cc));
+    setShowCcBcc(ccBccOpenByDefault || Boolean(initial.cc));
     setSubject(initial.subject);
     setBody(initial.body);
     setSendError("");
     setDraftNotice("");
-    setAttachments([]);
     setAttachmentFiles([]);
     setMinimized(false);
-  }, [account.email, message, mode]);
+  }, [account.email, ccBccOpenByDefault, message, mode]);
 
   function handleFiles(files: FileList | null) {
     if (!files?.length) return;
     const nextFiles = Array.from(files);
     setAttachmentFiles((current) => [...current, ...nextFiles]);
-    setAttachments((current) => [...current, ...nextFiles.map((file) => ({ name: file.name, size: formatFileSize(file.size) }))]);
     if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function removeAttachment(index: number) {
+    setAttachmentFiles((current) => current.filter((_, itemIndex) => itemIndex !== index));
   }
 
   async function submitSend() {
     if (!onSend || sending) return;
+    if (sendDisabledReason) {
+      setDraftNotice("");
+      setSendError(sendDisabledReason);
+      return;
+    }
     setSending(true);
     setSendError("");
     setDraftNotice("");
@@ -83,7 +103,8 @@ export function ComposePanel({ accounts, account, mode, message, onClose, onSend
         textBody: body,
         attachments: attachmentFiles,
       });
-      onClose();
+      onDirtyChange?.(false);
+      onClose({ force: true });
     } catch {
       setSendError("메일을 보내지 못했습니다. 입력값과 서버 상태를 확인해 주세요.");
     } finally {
@@ -105,7 +126,7 @@ export function ComposePanel({ accounts, account, mode, message, onClose, onSend
         <button className="ml-2 flex h-7 w-7 items-center justify-center rounded-md hover:bg-white/10" aria-label="작성 다시 열기" onClick={() => setMinimized(false)} type="button">
           <Icon name="expand" className="h-3.5 w-3.5" />
         </button>
-        <button className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-white/10" aria-label="작성 닫기" onClick={onClose} type="button">
+        <button className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-white/10" aria-label="작성 닫기" onClick={() => onClose()} type="button">
           <Icon name="close" className="h-3.5 w-3.5" />
         </button>
       </section>
@@ -123,7 +144,7 @@ export function ComposePanel({ accounts, account, mode, message, onClose, onSend
           <button className="hidden h-7 w-7 items-center justify-center rounded-md hover:bg-white/10 md:flex" aria-label={expanded ? "작성 축소" : "작성 확대"} onClick={() => setExpanded((value) => !value)} type="button">
             <Icon name={expanded ? "minimize" : "expand"} className="h-3.5 w-3.5" />
           </button>
-          <button className="flex h-7 w-7 items-center justify-center rounded-md bg-white/10 hover:bg-white/15 md:bg-transparent md:hover:bg-white/10" aria-label="작성 닫기" onClick={onClose} type="button">
+          <button className="flex h-7 w-7 items-center justify-center rounded-md bg-white/10 hover:bg-white/15 md:bg-transparent md:hover:bg-white/10" aria-label="작성 닫기" onClick={() => onClose()} type="button">
             <Icon name="close" className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -214,21 +235,24 @@ export function ComposePanel({ accounts, account, mode, message, onClose, onSend
       ) : null}
       {attachments.length ? (
         <div className="shrink-0 border-t border-line px-4 py-2">
-          <div className="mb-1 text-[11px] text-muted">첨부파일 {attachments.length}개</div>
+          <div className="mb-1 text-[11px] text-muted">첨부파일 {attachments.length}개 · {attachmentTotal}</div>
           <div className="flex flex-wrap gap-2">
-            {attachments.map((attachment) => (
-              <div key={`${attachment.name}-${attachment.size}`} className="flex max-w-full items-center gap-2 rounded-md border border-line bg-[#f7f8f9] px-2 py-1.5 text-[12px] text-text">
+            {attachments.map((attachment, index) => (
+              <div key={`${attachment.name}-${attachment.size}-${index}`} className="flex max-w-full items-center gap-2 rounded-md border border-line bg-[#f7f8f9] px-2 py-1.5 text-[12px] text-text">
                 <Icon name="paperclip" className="h-3.5 w-3.5 shrink-0 text-muted" />
                 <span className="max-w-[210px] truncate">{attachment.name}</span>
                 <span className="shrink-0 text-[11px] text-muted">{attachment.size}</span>
+                <button className="flex h-4 w-4 shrink-0 items-center justify-center rounded hover:bg-[#e8ebef]" aria-label={`${attachment.name} 첨부 제거`} onClick={() => removeAttachment(index)} type="button">
+                  <Icon name="close" className="h-3 w-3 text-muted" />
+                </button>
               </div>
             ))}
           </div>
         </div>
       ) : null}
       <div className="flex h-[46px] shrink-0 items-center border-t border-line px-4">
-        <button className="flex items-center gap-1.5 rounded-[7px] bg-accent py-2 pl-4 pr-3 text-[13px] font-medium text-white disabled:opacity-70" onClick={submitSend} disabled={sending} type="button">
-          {sending ? "전송 중" : "보내기"}
+        <button className="flex items-center gap-1.5 rounded-[7px] bg-accent py-2 pl-4 pr-3 text-[13px] font-medium text-white disabled:opacity-70" onClick={submitSend} disabled={sending || Boolean(sendDisabledReason)} title={sendDisabledReason || undefined} type="button">
+          {sending ? "전송 중" : sendError ? "다시 보내기" : "보내기"}
           <Icon name="chevron" className="h-3 w-3" />
         </button>
         <div className="ml-6 flex gap-5 text-muted">
@@ -239,9 +263,9 @@ export function ComposePanel({ accounts, account, mode, message, onClose, onSend
         <button className="ml-5 hidden text-[12px] font-medium text-muted hover:text-text sm:block" onClick={showDraftDeferredNotice} type="button">
           임시저장
         </button>
-        <div className="ml-4 hidden text-[11px] text-muted sm:block">{draftNotice ? "임시저장 대기" : "작성 중"}</div>
+        <div className="ml-4 hidden truncate text-[11px] text-muted sm:block">{sendDisabledReason || (draftNotice ? "임시저장 대기" : "작성 중")}</div>
         <input ref={fileInputRef} className="hidden" type="file" multiple onChange={(event) => handleFiles(event.target.files)} />
-        <button className="ml-auto flex h-[18px] w-[18px] items-center justify-center text-muted hover:text-text sm:ml-5" aria-label="작성 삭제" onClick={onClose} type="button">
+        <button className="ml-auto flex h-[18px] w-[18px] items-center justify-center text-muted hover:text-text sm:ml-5" aria-label="작성 삭제" onClick={() => onClose()} type="button">
           <Icon name="trash" className="h-[15px] w-[15px]" />
         </button>
       </div>
@@ -273,11 +297,22 @@ function formatFileSize(bytes: number) {
   return `${Math.round(bytes / 1024 / 102.4) / 10} MB`;
 }
 
+function totalFileSize(files: File[]) {
+  const total = files.reduce((sum, file) => sum + file.size, 0);
+  return formatFileSize(total);
+}
+
 function parseRecipients(value: string) {
   return value
     .split(/[,\n;]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function requiredFieldsMessage(recipients: string, subject: string) {
+  if (!parseRecipients(recipients).length) return "받는사람을 입력하세요.";
+  if (!subject.trim()) return "제목을 입력하세요.";
+  return "";
 }
 
 function composeTitle(mode: ComposeMode) {

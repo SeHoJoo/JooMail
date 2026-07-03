@@ -4,6 +4,8 @@ import { Icon } from "./Icon";
 import { EmptyState, ErrorState, LoadingState } from "./StateViews";
 import { MessageRow } from "./MessageRow";
 
+const ACCOUNT_SEARCH_RESULT_CAP = 50;
+
 type MessageListProps = {
   title: string;
   unreadCount: number;
@@ -16,22 +18,26 @@ type MessageListProps = {
   mode: MockMode;
   onRetry: () => void;
   onSearchScopeChange: (scope: SearchScope) => void;
-  onSelectMessage: (id: string) => void;
+  onSelectMessage: (id: string, options?: { shift: boolean; toggle: boolean }) => void;
   onToggleAllChecked: () => void;
   onToggleChecked: (id: string) => void;
   onToggleFlagged: (message: Message) => void;
+  onArchive: (message: Message) => Promise<void> | void;
+  onTrash: (message: Message) => Promise<void> | void;
+  onMarkUnread: (message: Message) => Promise<void> | void;
   onBulkArchive: () => Promise<void> | void;
   onBulkTrash: () => Promise<void> | void;
   onBulkMove: (mailboxId: string) => Promise<void> | void;
   onClearChecked: () => void;
 };
 
-export function MessageList({ title, unreadCount, messages, mailboxes, selectedId, checkedIds, search, searchScope, mode, onRetry, onSearchScopeChange, onSelectMessage, onToggleAllChecked, onToggleChecked, onToggleFlagged, onBulkArchive, onBulkTrash, onBulkMove, onClearChecked }: MessageListProps) {
+export function MessageList({ title, unreadCount, messages, mailboxes, selectedId, checkedIds, search, searchScope, mode, onRetry, onSearchScopeChange, onSelectMessage, onToggleAllChecked, onToggleChecked, onToggleFlagged, onArchive, onTrash, onMarkUnread, onBulkArchive, onBulkTrash, onBulkMove, onClearChecked }: MessageListProps) {
   const checkedCount = checkedIds.size;
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [actionError, setActionError] = useState("");
   const allVisibleChecked = messages.length > 0 && messages.every((message) => checkedIds.has(message.id));
   const moveTargets = mailboxes.filter((mailbox) => mailbox.kind !== "starred" && mailbox.selectable !== false);
+  const accountSearchCapped = Boolean(search) && searchScope === "account" && messages.length >= ACCOUNT_SEARCH_RESULT_CAP;
 
   return (
     <section className="flex min-w-[320px] shrink-0 flex-col border-r border-line bg-white" style={{ width: "var(--list-width)" }}>
@@ -81,7 +87,7 @@ export function MessageList({ title, unreadCount, messages, mailboxes, selectedI
         <div className="flex h-11 items-center border-b border-line px-2">
           <input className="h-[15px] w-[15px] accent-accent" checked={allVisibleChecked} disabled={!messages.length} onChange={onToggleAllChecked} type="checkbox" aria-label={allVisibleChecked ? "전체 선택 해제" : "전체 선택"} />
           <div className="ml-3 truncate text-[13.5px] font-bold text-ink">{search ? `'${search}' 결과 ${messages.length}건` : title}</div>
-          <div className="ml-auto text-[11.5px] text-muted">{search ? searchScopeLabel(searchScope) : `안읽음 ${unreadCount}`}</div>
+          <div className="ml-auto text-[11.5px] text-muted">{search ? searchScopeLabel(searchScope, accountSearchCapped) : `안읽음 ${unreadCount}`}</div>
           <button className="ml-4 text-muted" aria-label="메일 목록 새로고침" onClick={onRetry} type="button">
             <Icon name="refresh" className="h-[15px] w-[15px]" />
           </button>
@@ -114,9 +120,13 @@ export function MessageList({ title, unreadCount, messages, mailboxes, selectedI
                 selected={selectedId === message.id}
                 checked={checkedIds.has(message.id)}
                 search={search}
-                onSelect={() => onSelectMessage(message.id)}
+                metaLabel={search && searchScope === "account" ? mailboxLabel(mailboxes, message.mailboxId) : undefined}
+                onSelect={(options) => onSelectMessage(message.id, options)}
                 onToggleChecked={() => onToggleChecked(message.id)}
                 onToggleFlagged={() => onToggleFlagged(message)}
+                onArchive={() => onArchive(message)}
+                onTrash={() => onTrash(message)}
+                onMarkUnread={() => onMarkUnread(message)}
               />
             ))
           : null}
@@ -133,8 +143,13 @@ function ScopeButton({ scope, active, onSelect, children }: { scope: SearchScope
   );
 }
 
-function searchScopeLabel(scope: SearchScope) {
-  return scope === "account" ? "현재 계정" : "현재 메일함";
+function searchScopeLabel(scope: SearchScope, capped: boolean) {
+  if (scope === "account") return capped ? "현재 계정 · 최신 50건" : "현재 계정";
+  return "현재 메일함";
+}
+
+function mailboxLabel(mailboxes: Mailbox[], mailboxId: string) {
+  return mailboxes.find((mailbox) => mailbox.id === mailboxId)?.label ?? mailboxId;
 }
 
 async function runBulkAction(action: () => Promise<void> | void, setActionError: (value: string) => void, onDone: () => void) {

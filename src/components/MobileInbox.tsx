@@ -4,6 +4,8 @@ import { Icon } from "./Icon";
 import { highlight } from "./MessageRow";
 import { EmptyState, ErrorState, LoadingState } from "./StateViews";
 
+const ACCOUNT_SEARCH_RESULT_CAP = 50;
+
 type MobileInboxProps = {
   account: Account;
   messages: Message[];
@@ -12,9 +14,12 @@ type MobileInboxProps = {
   selectedMailboxId: string;
   checkedIds: Set<string>;
   search: string;
+  searchInput: string;
   searchScope: SearchScope;
   mode: MockMode;
   showRemoteImagesByDefault: boolean;
+  forceReadingId?: string;
+  folderMenuOpenByDefault?: boolean;
   onRetry: () => void;
   onCompose: () => void;
   onReply: (messageId: string) => void;
@@ -30,10 +35,10 @@ type MobileInboxProps = {
   onLogout?: () => void;
 };
 
-export function MobileInbox({ account, messages, selectedMessage, selectedId, selectedMailboxId, checkedIds, search, searchScope, mode, showRemoteImagesByDefault, onRetry, onCompose, onReply, onSearch, onSearchScopeChange, onSelectMessage, onSelectMailbox, onToggleChecked, onToggleFlagged, onClearChecked, onBulkArchive, onBulkTrash, onLogout }: MobileInboxProps) {
-  const [readingId, setReadingId] = useState("");
-  const [folderMenuOpen, setFolderMenuOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(Boolean(search));
+export function MobileInbox({ account, messages, selectedMessage, selectedId, selectedMailboxId, checkedIds, search, searchInput, searchScope, mode, showRemoteImagesByDefault, forceReadingId = "", folderMenuOpenByDefault = false, onRetry, onCompose, onReply, onSearch, onSearchScopeChange, onSelectMessage, onSelectMailbox, onToggleChecked, onToggleFlagged, onClearChecked, onBulkArchive, onBulkTrash, onLogout }: MobileInboxProps) {
+  const [readingId, setReadingId] = useState(forceReadingId);
+  const [folderMenuOpen, setFolderMenuOpen] = useState(folderMenuOpenByDefault);
+  const [searchOpen, setSearchOpen] = useState(Boolean(search || searchInput));
   const mailboxTitle = findMailbox(account.mailboxes, selectedMailboxId)?.label ?? "받은편지함";
   const title = search ? "검색 결과" : mailboxTitle;
   const checkedCount = checkedIds.size;
@@ -42,12 +47,25 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, se
   const emptyTitle = search ? "검색 결과가 없습니다" : "받은편지함이 비어 있습니다";
   const emptyDescription = search ? "검색어를 확인해주세요" : "새 메일이 도착하면 여기에 표시됩니다";
   const readingMessage = readingId && selectedMessage?.id === readingId ? selectedMessage : messages.find((message) => message.id === readingId);
+  const accountSearchCapped = Boolean(search) && searchScope === "account" && messages.length >= ACCOUNT_SEARCH_RESULT_CAP;
 
   useEffect(() => {
     if (readingId && !messages.some((message) => message.id === readingId)) {
       setReadingId("");
     }
   }, [messages, readingId]);
+
+  useEffect(() => {
+    setReadingId(forceReadingId);
+  }, [forceReadingId]);
+
+  useEffect(() => {
+    setFolderMenuOpen(folderMenuOpenByDefault);
+  }, [folderMenuOpenByDefault]);
+
+  useEffect(() => {
+    if (search || searchInput) setSearchOpen(true);
+  }, [search, searchInput]);
 
   if (readingMessage) {
     return <MobileReadingPane message={readingMessage} showRemoteImagesByDefault={showRemoteImagesByDefault} onBack={() => setReadingId("")} onReply={onReply} onToggleFlagged={onToggleFlagged} />;
@@ -87,7 +105,7 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, se
         <div className="px-6 pt-3">
           <input
             className="h-10 w-full rounded-lg bg-[#f2f3f5] px-3 text-[13px] text-ink outline-none placeholder:text-muted"
-            value={search}
+            value={searchInput}
             onChange={(event) => onSearch(event.target.value)}
             placeholder="메일 검색"
             aria-label="메일 검색"
@@ -96,7 +114,7 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, se
       ) : null}
       {search ? (
         <div className="px-6 pt-2 text-[12.5px] text-muted">
-          <div>"{search}"에 대한 결과 {messages.length}건 · {searchScope === "account" ? "현재 계정" : "현재 메일함"}</div>
+          <div>"{search}"에 대한 결과 {messages.length}건 · {searchScope === "account" ? (accountSearchCapped ? "현재 계정 · 최신 50건" : "현재 계정") : "현재 메일함"}</div>
           <div className="mt-2 inline-flex rounded-md border border-line bg-white p-0.5">
             <MobileScopeButton scope="mailbox" active={searchScope === "mailbox"} onSelect={onSearchScopeChange}>
               현재 메일함
@@ -174,7 +192,8 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, se
             </span>
             <span className="absolute left-[108px] right-12 top-8 truncate text-[13.5px] text-ink">{highlight(message.subject, search)}</span>
             {message.hasAttachment ? <Icon name="paperclip" className="absolute right-8 top-[33px] h-3.5 w-3.5 text-muted" /> : null}
-            <span className="absolute left-[108px] right-6 top-[55px] truncate text-[12.5px] text-[#a2a8b0]">{highlight(message.snippet, search)}</span>
+            <span className={["absolute left-[108px] top-[55px] truncate text-[12.5px] text-[#a2a8b0]", search && searchScope === "account" ? "right-[104px]" : "right-6"].join(" ")}>{highlight(message.snippet, search)}</span>
+            {search && searchScope === "account" ? <span className="absolute right-6 top-[55px] max-w-[72px] truncate rounded bg-[#f2f3f5] px-1.5 py-0.5 text-[10.5px] leading-3 text-muted">{findMailbox(account.mailboxes, message.mailboxId)?.label ?? message.mailboxId}</span> : null}
           </button>
           );
         }) : null}

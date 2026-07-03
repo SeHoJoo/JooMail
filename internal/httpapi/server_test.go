@@ -324,6 +324,77 @@ func TestMessageAttachmentRouteDownloadsDecodedAttachment(t *testing.T) {
 	}
 }
 
+func TestExtractAttachmentPayloadDefaultsMissingContentType(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Attachment",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: multipart/mixed; boundary=abc",
+		"",
+		"--abc",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		"Hello.",
+		"--abc",
+		"Content-Disposition: attachment; filename=\"unknown.bin\"",
+		"",
+		"payload",
+		"--abc--",
+		"",
+	}, "\r\n")
+
+	attachment, err := extractAttachmentPayload([]byte(rawMessage), "att_0")
+
+	if err != nil {
+		t.Fatalf("extract attachment: %v", err)
+	}
+	if attachment.ContentType != "application/octet-stream" {
+		t.Fatalf("content type = %q, want fallback octet-stream", attachment.ContentType)
+	}
+}
+
+func TestMessageAttachmentDownloadFilenameCannotInjectHeaders(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Attachment",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: multipart/mixed; boundary=abc",
+		"",
+		"--abc",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		"Hello.",
+		"--abc",
+		"Content-Type: text/plain",
+		"Content-Disposition: attachment; filename=\"=?UTF-8?Q?evil=0D=0AInjected:_yes.txt?=\"",
+		"",
+		"payload",
+		"--abc--",
+		"",
+	}, "\r\n")
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin:  func(username, password string) string { return "OK LOGIN completed" },
+		messages: map[string]map[string]string{"INBOX": {"7": rawMessage}},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+	messageID := messageID("inbox", "7")
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/messages/"+messageID+"/attachments/att_0", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	contentDisposition := recorder.Header().Get("Content-Disposition")
+	if strings.ContainsAny(contentDisposition, "\r\n") {
+		t.Fatalf("content disposition = %q, contains raw newline", contentDisposition)
+	}
+	if recorder.Header().Get("Injected") != "" {
+		t.Fatalf("injected header = %q, want none", recorder.Header().Get("Injected"))
+	}
+}
+
 func TestAccountsSkipNoselectNamespaceRootMailbox(t *testing.T) {
 	host, port := startFakeIMAPServer(t, fakeIMAPScript{
 		onLogin: func(username, password string) string { return "OK LOGIN completed" },
@@ -705,6 +776,82 @@ func TestMessageSummariesUseServerSideSearchBeforeLimit(t *testing.T) {
 	}
 }
 
+func TestMessageSummariesLimitFetchesNewestUIDs(t *testing.T) {
+	messages := largeMailboxMessages("INBOX", 60, 10)
+	var fetchedUIDSet string
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		onFetch: func(mailbox string, uidSet string, dataItems string) {
+			if mailbox == "INBOX" {
+				fetchedUIDSet = uidSet
+			}
+		},
+		messages: map[string]map[string]string{"INBOX": messages},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts/jooseho%40good-night.co.kr/mailboxes/inbox/messages", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	wantUIDSet := descendingUIDSet(60, 11)
+	if fetchedUIDSet != wantUIDSet {
+		t.Fatalf("fetched UIDs = %q, want newest capped set %q", fetchedUIDSet, wantUIDSet)
+	}
+	var body struct {
+		Messages []MessageSummary `json:"messages"`
+	}
+	decode(t, recorder, &body)
+	if len(body.Messages) != messageSummaryLimit {
+		t.Fatalf("message count = %d, want %d", len(body.Messages), messageSummaryLimit)
+	}
+	if body.Messages[0].Subject != "INBOX message 60" || body.Messages[len(body.Messages)-1].Subject != "INBOX message 11" {
+		t.Fatalf("subjects = first %q last %q, want UID 60 through 11", body.Messages[0].Subject, body.Messages[len(body.Messages)-1].Subject)
+	}
+}
+
+func TestAccountScopeSearchCapsPerMailboxAndFinalResults(t *testing.T) {
+	var fetched []string
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin:   func(username, password string) string { return "OK LOGIN completed" },
+		mailboxes: []string{"INBOX", "Archive"},
+		onFetch: func(mailbox string, uidSet string, dataItems string) {
+			fetched = append(fetched, mailbox+":"+uidSet)
+		},
+		messages: map[string]map[string]string{
+			"INBOX":   largeMailboxMessages("INBOX", 60, 10),
+			"Archive": largeMailboxMessages("Archive", 60, 9),
+		},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts/jooseho%40good-night.co.kr/mailboxes/inbox/messages?q=message&scope=account", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	wantUIDSet := descendingUIDSet(60, 11)
+	if !slices.Contains(fetched, "INBOX:"+wantUIDSet) || !slices.Contains(fetched, "Archive:"+wantUIDSet) {
+		t.Fatalf("fetched = %#v, want each mailbox capped to %q", fetched, wantUIDSet)
+	}
+	var body struct {
+		Messages []MessageSummary `json:"messages"`
+	}
+	decode(t, recorder, &body)
+	if len(body.Messages) != messageSummaryLimit {
+		t.Fatalf("message count = %d, want %d", len(body.Messages), messageSummaryLimit)
+	}
+	for i, message := range body.Messages {
+		if message.MailboxID != "inbox" {
+			t.Fatalf("message %d mailbox = %q, want final newest results from INBOX", i, message.MailboxID)
+		}
+	}
+	if body.Messages[0].Subject != "INBOX message 60" || body.Messages[len(body.Messages)-1].Subject != "INBOX message 11" {
+		t.Fatalf("subjects = first %q last %q, want UID 60 through 11", body.Messages[0].Subject, body.Messages[len(body.Messages)-1].Subject)
+	}
+}
+
 func TestSearchCriteriaQuotesSpecialCharactersAndNonASCII(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -721,6 +868,146 @@ func TestSearchCriteriaQuotesSpecialCharactersAndNonASCII(t *testing.T) {
 				t.Fatalf("searchCriteria(%q) = %q, want %q", tt.query, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSearchCriteriaWithoutCharsetOnlyStripsUTF8Prefix(t *testing.T) {
+	criteria, ok := searchCriteriaWithoutCharset(`CHARSET UTF-8 TEXT "한글 검색"`)
+	if !ok || criteria != `TEXT "한글 검색"` {
+		t.Fatalf("fallback criteria = %q ok %v, want charset removed", criteria, ok)
+	}
+	if criteria, ok := searchCriteriaWithoutCharset(`TEXT "plain"`); ok || criteria != "" {
+		t.Fatalf("fallback criteria = %q ok %v, want no fallback for ASCII criteria", criteria, ok)
+	}
+}
+
+func TestMessageSummariesRetryNonASCIISearchWithoutCharsetWhenRejected(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: 한글 검색 결과",
+		"Date: Thu, 2 Jul 2026 09:00:00 +0900",
+		"",
+		"Report.",
+	}, "\r\n")
+	var criteria []string
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		onSearch: func(mailbox string, gotCriteria string) ([]string, string) {
+			criteria = append(criteria, gotCriteria)
+			if strings.HasPrefix(gotCriteria, "CHARSET UTF-8 ") {
+				return nil, "NO [BADCHARSET] unsupported charset"
+			}
+			return []string{"4"}, "OK SEARCH completed"
+		},
+		messages: map[string]map[string]string{"INBOX": {"4": rawMessage}},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts/jooseho%40good-night.co.kr/mailboxes/inbox/messages?q=%ED%95%9C%EA%B8%80", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	wantCriteria := []string{`CHARSET UTF-8 TEXT "한글"`, `TEXT "한글"`}
+	if !slicesEqual(criteria, wantCriteria) {
+		t.Fatalf("criteria = %#v, want charset retry %#v", criteria, wantCriteria)
+	}
+	var body struct {
+		Messages []MessageSummary `json:"messages"`
+	}
+	decode(t, recorder, &body)
+	if len(body.Messages) != 1 || body.Messages[0].Subject != "한글 검색 결과" {
+		t.Fatalf("messages = %#v, want fallback search result", body.Messages)
+	}
+}
+
+func TestIMAPMailboxNamesWithQuotesAndBackslashes(t *testing.T) {
+	sourceMailbox := "Projects\"Q\"\\Source"
+	targetMailbox := "Projects\"Q\"\\Archive"
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Special mailbox",
+		"Date: Thu, 2 Jul 2026 09:00:00 +0900",
+		"",
+		"Report.",
+	}, "\r\n")
+	var selected []string
+	var searched []string
+	var fetched []string
+	var statusMailboxes []string
+	var moved []string
+	var copied []string
+	var appended []string
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		onSelect: func(mailbox string) string {
+			selected = append(selected, mailbox)
+			return "OK SELECT completed"
+		},
+		onSearch: func(mailbox string, criteria string) ([]string, string) {
+			searched = append(searched, mailbox)
+			return []string{"7"}, "OK SEARCH completed"
+		},
+		onFetch: func(mailbox string, uidSet string, dataItems string) {
+			fetched = append(fetched, mailbox)
+		},
+		onStatus: func(mailbox string) (int, string) {
+			statusMailboxes = append(statusMailboxes, mailbox)
+			return 3, "OK STATUS completed"
+		},
+		onMove: func(mailbox string, uid string, target string) string {
+			moved = append(moved, mailbox+"->"+target)
+			return "NO MOVE unavailable"
+		},
+		onCopy: func(mailbox string, uid string, target string) string {
+			copied = append(copied, mailbox+"->"+target)
+			return "OK COPY completed"
+		},
+		onAppend: func(mailbox string, message string) string {
+			appended = append(appended, mailbox)
+			return "OK APPEND completed"
+		},
+		messages: map[string]map[string]string{sourceMailbox: {"7": rawMessage}},
+	})
+	client, err := openIMAPSession(testConfig(t, host, port), storedCredential{
+		Email:        "jooseho@good-night.co.kr",
+		IMAPUsername: "jooseho",
+		Password:     "correct-password",
+	})
+	if err != nil {
+		t.Fatalf("open imap session: %v", err)
+	}
+	defer client.Close()
+
+	if _, err := client.messageSummaries("jooseho@good-night.co.kr", mailboxID(sourceMailbox), "", messageSearchScopeMailbox); err != nil {
+		t.Fatalf("message summaries: %v", err)
+	}
+	if _, err := client.mailboxUnreadCount(sourceMailbox); err != nil {
+		t.Fatalf("mailbox unread count: %v", err)
+	}
+	if err := client.moveMessage(messageID(mailboxID(sourceMailbox), "7"), mailboxID(targetMailbox)); err != nil {
+		t.Fatalf("move message: %v", err)
+	}
+	if err := client.appendMessage(targetMailbox, rawMessage); err != nil {
+		t.Fatalf("append message: %v", err)
+	}
+
+	if !containsString(selected, sourceMailbox) || !containsString(searched, sourceMailbox) || !containsString(fetched, sourceMailbox) {
+		t.Fatalf("summary commands selected=%#v searched=%#v fetched=%#v, want source mailbox", selected, searched, fetched)
+	}
+	if !containsString(statusMailboxes, sourceMailbox) {
+		t.Fatalf("status mailboxes = %#v, want source mailbox", statusMailboxes)
+	}
+	if !containsString(moved, sourceMailbox+"->"+targetMailbox) {
+		t.Fatalf("move commands = %#v, want source to target", moved)
+	}
+	if !containsString(copied, sourceMailbox+"->"+targetMailbox) {
+		t.Fatalf("copy commands = %#v, want fallback source to target", copied)
+	}
+	if !containsString(appended, targetMailbox) {
+		t.Fatalf("append mailboxes = %#v, want target mailbox", appended)
 	}
 }
 
@@ -782,6 +1069,56 @@ func TestMessageSummariesAccountScopeSearchesSelectableMailboxes(t *testing.T) {
 	}
 }
 
+func TestAccountScopeSearchSkipsNoselectMailboxes(t *testing.T) {
+	clientMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Client report",
+		"Date: Thu, 2 Jul 2026 09:00:00 +0900",
+		"",
+		"Report.",
+	}, "\r\n")
+	var searched []string
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		mailboxLines: []string{
+			`* LIST () "/" "INBOX"`,
+			`* LIST (\Noselect \HasChildren) "/" "Work"`,
+			`* LIST () "/" "Work/Clients"`,
+		},
+		onSearch: func(mailbox string, criteria string) ([]string, string) {
+			searched = append(searched, mailbox)
+			if mailbox == "Work/Clients" {
+				return []string{"4"}, "OK SEARCH completed"
+			}
+			return nil, "OK SEARCH completed"
+		},
+		messages: map[string]map[string]string{
+			"Work/Clients": {"4": clientMessage},
+		},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts/jooseho%40good-night.co.kr/mailboxes/inbox/messages?q=report&scope=account", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if slices.Contains(searched, "Work") {
+		t.Fatalf("searched mailboxes = %#v, should not search noselect parent", searched)
+	}
+	if !slices.Contains(searched, "INBOX") || !slices.Contains(searched, "Work/Clients") {
+		t.Fatalf("searched mailboxes = %#v, want INBOX and selectable child", searched)
+	}
+	var body struct {
+		Messages []MessageSummary `json:"messages"`
+	}
+	decode(t, recorder, &body)
+	if len(body.Messages) != 1 || body.Messages[0].MailboxID != mailboxID("Work/Clients") {
+		t.Fatalf("messages = %#v, want selectable child result", body.Messages)
+	}
+}
+
 func TestAccountsPopulateUnreadCountsFromIMAPStatus(t *testing.T) {
 	host, port := startFakeIMAPServer(t, fakeIMAPScript{
 		onLogin:   func(username, password string) string { return "OK LOGIN completed" },
@@ -820,6 +1157,49 @@ func TestAccountsPopulateUnreadCountsFromIMAPStatus(t *testing.T) {
 	}
 	if counts["inbox"] != 3 || counts[mailboxID("Archive")] != 2 {
 		t.Fatalf("mailbox unread counts = %#v", counts)
+	}
+}
+
+func TestAccountsSkipFailedUnreadCountsPerMailbox(t *testing.T) {
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin:   func(username, password string) string { return "OK LOGIN completed" },
+		mailboxes: []string{"INBOX", "Archive", "Sent"},
+		onStatus: func(mailbox string) (int, string) {
+			switch mailbox {
+			case "INBOX":
+				return 3, "OK STATUS completed"
+			case "Archive":
+				return 0, "NO STATUS failed"
+			case "Sent":
+				return 2, "OK STATUS completed"
+			default:
+				return 0, "OK STATUS completed"
+			}
+		},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts", nil, cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var body struct {
+		Accounts []Account `json:"accounts"`
+	}
+	decode(t, recorder, &body)
+	if len(body.Accounts) != 1 {
+		t.Fatalf("accounts = %#v", body.Accounts)
+	}
+	if body.Accounts[0].Unread != 5 {
+		t.Fatalf("account unread = %d, want successful mailbox counts only", body.Accounts[0].Unread)
+	}
+	counts := map[string]int{}
+	for _, mailbox := range flattenSelectableMailboxes(body.Accounts[0].Mailboxes) {
+		counts[mailbox.ID] = mailbox.Unread
+	}
+	if counts["inbox"] != 3 || counts[mailboxID("Archive")] != 0 || counts[mailboxID("Sent")] != 2 {
+		t.Fatalf("mailbox unread counts = %#v, want failed Archive count left at zero", counts)
 	}
 }
 
@@ -984,6 +1364,77 @@ func TestMessageMoveRouteMovesMessageToTargetMailbox(t *testing.T) {
 	}
 	if movedUID != "7" || movedTarget != "Archive" {
 		t.Fatalf("move = uid %q target %q, want 7/Archive", movedUID, movedTarget)
+	}
+}
+
+func TestMessageMoveRouteMovesToNestedArchiveAndTrashTargets(t *testing.T) {
+	for _, targetMailbox := range []string{"Work/Archive", "Work/Trash"} {
+		t.Run(targetMailbox, func(t *testing.T) {
+			var movedUID string
+			var movedTarget string
+			host, port := startFakeIMAPServer(t, fakeIMAPScript{
+				onLogin: func(username, password string) string { return "OK LOGIN completed" },
+				onMove: func(mailbox string, uid string, target string) string {
+					movedUID = uid
+					movedTarget = target
+					return "OK MOVE completed"
+				},
+				messages: map[string]map[string]string{"INBOX": {"7": "From: Alice <alice@example.com>\r\nSubject: Move\r\n\r\nBody"}},
+			})
+			server, cookie := loginTestSession(t, testConfig(t, host, port))
+			messageID := messageID("inbox", "7")
+			body := fmt.Sprintf(`{"mailboxId":%q}`, mailboxID(targetMailbox))
+
+			recorder := requestWithServer(t, server, http.MethodPost, "/api/messages/"+messageID+"/move", strings.NewReader(body), cookie)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+			}
+			if movedUID != "7" || movedTarget != targetMailbox {
+				t.Fatalf("move = uid %q target %q, want 7/%s", movedUID, movedTarget, targetMailbox)
+			}
+		})
+	}
+}
+
+func TestMessageMoveRouteFallsBackToCopyStoreExpunge(t *testing.T) {
+	var events []string
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		onMove: func(mailbox string, uid string, target string) string {
+			events = append(events, "MOVE "+uid+" "+target)
+			return "NO MOVE unavailable"
+		},
+		onCopy: func(mailbox string, uid string, target string) string {
+			events = append(events, "COPY "+uid+" "+target)
+			return "OK COPY completed"
+		},
+		onStore: func(mailbox string, uid string, operation string, flag string) string {
+			events = append(events, "STORE "+uid+" "+operation+" "+flag)
+			return "OK STORE completed"
+		},
+		onExpunge: func(mailbox string) string {
+			events = append(events, "EXPUNGE "+mailbox)
+			return "OK EXPUNGE completed"
+		},
+		messages: map[string]map[string]string{"INBOX": {"7": "From: Alice <alice@example.com>\r\nSubject: Move\r\n\r\nBody"}},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+	messageID := messageID("inbox", "7")
+
+	recorder := requestWithServer(t, server, http.MethodPost, "/api/messages/"+messageID+"/move", strings.NewReader(`{"mailboxId":"mbox_QXJjaGl2ZQ"}`), cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	want := []string{
+		"MOVE 7 Archive",
+		"COPY 7 Archive",
+		`STORE 7 +FLAGS.SILENT (\Deleted)`,
+		"EXPUNGE INBOX",
+	}
+	if !slicesEqual(events, want) {
+		t.Fatalf("events = %#v, want fallback sequence %#v", events, want)
 	}
 }
 
@@ -1167,6 +1618,330 @@ func TestParseRawMessageMultipartRelatedMapsCIDImages(t *testing.T) {
 	}
 }
 
+func TestParseRawMessageNestedMixedInsideAlternative(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Nested mixed alternative",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: multipart/alternative; boundary=alt",
+		"",
+		"--alt",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		"Plain fallback.",
+		"",
+		"--alt",
+		"Content-Type: multipart/mixed; boundary=mix",
+		"",
+		"--mix",
+		"Content-Type: text/html; charset=utf-8",
+		"",
+		"<p>HTML body</p>",
+		"",
+		"--mix",
+		"Content-Type: application/pdf; name=\"nested.pdf\"",
+		"Content-Disposition: attachment; filename=\"nested.pdf\"",
+		"Content-Transfer-Encoding: base64",
+		"",
+		"cGRm",
+		"--mix--",
+		"--alt--",
+		"",
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if strings.Join(message.TextBody, "\n") != "Plain fallback." {
+		t.Fatalf("textBody = %#v, want fallback text", message.TextBody)
+	}
+	if !strings.Contains(message.HTMLBody, "HTML body") {
+		t.Fatalf("htmlBody = %q, want nested HTML body", message.HTMLBody)
+	}
+	if len(message.Attachments) != 1 || message.Attachments[0].Name != "nested.pdf" || !message.HasAttachment {
+		t.Fatalf("attachments = %#v, want nested attachment", message.Attachments)
+	}
+}
+
+func TestParseRawMessageRelatedInsideAlternativeMapsCIDImages(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Related alternative",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: multipart/alternative; boundary=alt",
+		"",
+		"--alt",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		"Plain related fallback.",
+		"",
+		"--alt",
+		"Content-Type: multipart/related; boundary=rel",
+		"",
+		"--rel",
+		"Content-Type: text/html; charset=utf-8",
+		"",
+		`<p>Logo <img src="cid:logo@example"></p>`,
+		"",
+		"--rel",
+		"Content-Type: image/png; name=\"logo.png\"",
+		"Content-ID: <logo@example>",
+		"Content-Disposition: inline; filename=\"logo.png\"",
+		"Content-Transfer-Encoding: base64",
+		"",
+		"iVBORw0KGgo=",
+		"--rel--",
+		"--alt--",
+		"",
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if strings.Join(message.TextBody, "\n") != "Plain related fallback." {
+		t.Fatalf("textBody = %#v, want fallback text", message.TextBody)
+	}
+	if !strings.Contains(message.HTMLBody, `src="data:image/png;base64,iVBORw0KGgo="`) {
+		t.Fatalf("htmlBody = %q, want related cid image mapped", message.HTMLBody)
+	}
+	if len(message.Attachments) != 0 {
+		t.Fatalf("attachments = %#v, want inline image excluded", message.Attachments)
+	}
+}
+
+func TestParseRawMessageDuplicateContentIDUsesLastInlineImage(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Duplicate CID",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: multipart/related; boundary=rel",
+		"",
+		"--rel",
+		"Content-Type: text/html; charset=utf-8",
+		"",
+		`<p><img src="cid:dup@example"></p>`,
+		"",
+		"--rel",
+		"Content-Type: image/png",
+		"Content-ID: <dup@example>",
+		"Content-Transfer-Encoding: base64",
+		"",
+		"Zmlyc3Q=",
+		"--rel",
+		"Content-Type: image/png",
+		"Content-ID: <dup@example>",
+		"Content-Transfer-Encoding: base64",
+		"",
+		"c2Vjb25k",
+		"--rel--",
+		"",
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if !strings.Contains(message.HTMLBody, "c2Vjb25k") || strings.Contains(message.HTMLBody, "Zmlyc3Q=") {
+		t.Fatalf("htmlBody = %q, want duplicate CID to resolve predictably to last image", message.HTMLBody)
+	}
+	if len(message.Attachments) != 0 {
+		t.Fatalf("attachments = %#v, want duplicate inline images excluded", message.Attachments)
+	}
+}
+
+func TestParseRawMessageMissingRelatedCIDImageIsSanitized(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Missing CID",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: multipart/related; boundary=rel",
+		"",
+		"--rel",
+		"Content-Type: text/html; charset=utf-8",
+		"",
+		`<p>Missing <img src="cid:missing@example" alt="missing"></p>`,
+		"--rel--",
+		"",
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if strings.Contains(strings.ToLower(message.HTMLBody), "cid:") {
+		t.Fatalf("htmlBody = %q, want unresolved cid source removed by sanitizer", message.HTMLBody)
+	}
+	if message.RemoteImagesBlocked || len(message.Attachments) != 0 {
+		t.Fatalf("remoteImagesBlocked = %v attachments = %#v, want graceful missing cid", message.RemoteImagesBlocked, message.Attachments)
+	}
+}
+
+func TestParseRawMessageMalformedAttachmentFilenameUsesFallback(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Malformed filename",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: multipart/mixed; boundary=mix",
+		"",
+		"--mix",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		"Body.",
+		"--mix",
+		"Content-Type: application/octet-stream",
+		"Content-Disposition: attachment; filename=\"broken",
+		"",
+		"payload",
+		"--mix--",
+		"",
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if len(message.Attachments) != 1 || message.Attachments[0].Name != "attachment" {
+		t.Fatalf("attachments = %#v, want safe fallback filename", message.Attachments)
+	}
+}
+
+func TestParseRawMessageRFC2231EncodedFilename(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Encoded filename",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: multipart/mixed; boundary=mix",
+		"",
+		"--mix",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		"Body.",
+		"--mix",
+		"Content-Type: application/pdf",
+		"Content-Disposition: attachment; filename*=utf-8''%ED%95%9C%EA%B8%80.pdf",
+		"",
+		"payload",
+		"--mix--",
+		"",
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if len(message.Attachments) != 1 || message.Attachments[0].Name != "한글.pdf" {
+		t.Fatalf("attachments = %#v, want decoded RFC 2231 filename", message.Attachments)
+	}
+}
+
+func TestParseRawMessageLargeUnicodeSnippetTruncatesByRune(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Long snippet",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		strings.Repeat("한", 160),
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if got := len([]rune(message.Snippet)); got != 140 {
+		t.Fatalf("snippet rune length = %d, want 140", got)
+	}
+	if message.Snippet != strings.Repeat("한", 140) {
+		t.Fatalf("snippet = %q, want rune-safe truncation", message.Snippet)
+	}
+}
+
+func TestParseRawMessageHTMLOnlyMessage(t *testing.T) {
+	rawMessage := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: HTML only",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Content-Type: text/html; charset=utf-8",
+		"",
+		"<p>Hello <strong>HTML</strong></p><script>alert(1)</script>",
+	}, "\r\n")
+
+	message, err := parseRawMessage("account", "inbox", "8", []byte(rawMessage))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if len(message.TextBody) != 0 || message.Snippet != "" {
+		t.Fatalf("textBody = %#v snippet = %q, want no frontend text fallback requirement", message.TextBody, message.Snippet)
+	}
+	if !strings.Contains(message.HTMLBody, "Hello") || strings.Contains(strings.ToLower(message.HTMLBody), "script") {
+		t.Fatalf("htmlBody = %q, want sanitized HTML-only body", message.HTMLBody)
+	}
+}
+
+func TestSanitizeMailHTMLRemovesCSSRemoteImageURLs(t *testing.T) {
+	htmlBody, remoteImagesBlocked := sanitizeMailHTML(`<div style="background-image:url(https://tracker.example/pixel.png)">Hello</div>`)
+
+	if strings.Contains(htmlBody, "tracker.example") || strings.Contains(strings.ToLower(htmlBody), "style=") {
+		t.Fatalf("htmlBody = %q, want CSS remote URL and style removed", htmlBody)
+	}
+	if remoteImagesBlocked {
+		t.Fatal("remoteImagesBlocked = true, want only img src remote images to trigger display toggle")
+	}
+}
+
+func TestSanitizeMailHTMLBlocksSVGDataImages(t *testing.T) {
+	htmlBody, remoteImagesBlocked := sanitizeMailHTML(`<img src="data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+">`)
+
+	if strings.Contains(strings.ToLower(htmlBody), "svg") || strings.Contains(strings.ToLower(htmlBody), "onload") || strings.Contains(htmlBody, "data:image") {
+		t.Fatalf("htmlBody = %q, want SVG data image removed", htmlBody)
+	}
+	if remoteImagesBlocked {
+		t.Fatal("remoteImagesBlocked = true, want data image not treated as remote")
+	}
+}
+
+func TestSanitizeMailHTMLAllowsRasterDataImages(t *testing.T) {
+	htmlBody, remoteImagesBlocked := sanitizeMailHTML(`<img src="data:image/png;base64,iVBORw0KGgo=" alt="logo">`)
+
+	if !strings.Contains(htmlBody, `src="data:image/png;base64,iVBORw0KGgo="`) {
+		t.Fatalf("htmlBody = %q, want safe raster data image preserved", htmlBody)
+	}
+	if remoteImagesBlocked {
+		t.Fatal("remoteImagesBlocked = true, want data image not treated as remote")
+	}
+}
+
+func TestSanitizeMailHTMLRemovesForms(t *testing.T) {
+	htmlBody, _ := sanitizeMailHTML(`<form action="https://phish.example"><input name="password"><button type="submit">Send</button></form><p>Keep me</p>`)
+
+	for _, blocked := range []string{"form", "input", "button", "phish.example"} {
+		if strings.Contains(strings.ToLower(htmlBody), blocked) {
+			t.Fatalf("htmlBody = %q, contains blocked form content %q", htmlBody, blocked)
+		}
+	}
+	if !strings.Contains(htmlBody, "Keep me") {
+		t.Fatalf("htmlBody = %q, want safe paragraph preserved", htmlBody)
+	}
+}
+
 func TestParseRawMessageTransferEncodings(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1341,6 +2116,83 @@ func TestSendUsesStoredCredentialForSMTP(t *testing.T) {
 	}
 }
 
+func TestSendBccRecipientsDoNotLeakInMessageHeaders(t *testing.T) {
+	imapHost, imapPort := startFakeIMAPServer(t, fakeIMAPScript{
+		mailboxes: []string{"INBOX", "Sent"},
+		onLogin:   func(username, password string) string { return "OK LOGIN completed" },
+		onAppend:  func(mailbox string, message string) string { return "OK APPEND completed" },
+	})
+	var smtpData string
+	var rcptLines []string
+	smtpHost, smtpPort := startFakeSMTPServerWithScript(t, fakeSMTPScript{data: &smtpData, rcptLines: &rcptLines})
+	config := testConfig(t, imapHost, imapPort)
+	config.SMTPHost = smtpHost
+	config.SMTPPort = smtpPort
+	config.SMTPUserFormat = "localpart"
+	server, cookie := loginTestSessionWithPassword(t, config, "mail-password")
+
+	recorder := requestWithServer(t, server, http.MethodPost, "/api/send", strings.NewReader(`{"to":["alice@example.com"],"cc":["carol@example.com"],"bcc":["hidden@example.com"],"subject":"Hello","textBody":"Plain message"}`), cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	for _, want := range []string{"RCPT TO:<alice@example.com>", "RCPT TO:<carol@example.com>", "RCPT TO:<hidden@example.com>"} {
+		if !slices.Contains(rcptLines, want) {
+			t.Fatalf("rcpt lines = %#v, missing %q", rcptLines, want)
+		}
+	}
+	if strings.Contains(strings.ToLower(smtpData), "\nbcc:") {
+		t.Fatalf("smtp data leaked bcc header: %s", smtpData)
+	}
+}
+
+func TestSendRejectsInvalidRecipientsBeforeSMTP(t *testing.T) {
+	imapHost, imapPort := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+	})
+	server, cookie := loginTestSession(t, testConfig(t, imapHost, imapPort))
+	tests := []struct {
+		name      string
+		body      string
+		wantError string
+	}{
+		{
+			name:      "trimmed empty to",
+			body:      `{"to":["  "],"subject":"Hello","textBody":"Plain message"}`,
+			wantError: "to and subject are required",
+		},
+		{
+			name:      "invalid to",
+			body:      `{"to":["bad@@example.com"],"subject":"Hello","textBody":"Plain message"}`,
+			wantError: "invalid recipient",
+		},
+		{
+			name:      "invalid cc",
+			body:      `{"to":["alice@example.com"],"cc":["bad@@example.com"],"subject":"Hello","textBody":"Plain message"}`,
+			wantError: "invalid recipient",
+		},
+		{
+			name:      "invalid bcc",
+			body:      `{"to":["alice@example.com"],"bcc":["bad@@example.com"],"subject":"Hello","textBody":"Plain message"}`,
+			wantError: "invalid recipient",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := requestWithServer(t, server, http.MethodPost, "/api/send", strings.NewReader(tt.body), cookie)
+
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+			}
+			var response map[string]string
+			decode(t, recorder, &response)
+			if response["error"] != tt.wantError {
+				t.Fatalf("error = %q, want %q", response["error"], tt.wantError)
+			}
+		})
+	}
+}
+
 func TestSendAcceptsMultipartAttachments(t *testing.T) {
 	var appendedMessage string
 	imapHost, imapPort := startFakeIMAPServer(t, fakeIMAPScript{
@@ -1392,6 +2244,94 @@ func TestSendAcceptsMultipartAttachments(t *testing.T) {
 	}
 	if normalizeMailLineEndings(appendedMessage) != normalizeMailLineEndings(smtpData) {
 		t.Fatalf("appended message = %q, want SMTP data %q", appendedMessage, smtpData)
+	}
+}
+
+func TestSendSMTPFailuresReturnGenericBadGateway(t *testing.T) {
+	tests := []struct {
+		name   string
+		script fakeSMTPScript
+	}{
+		{name: "auth failure", script: fakeSMTPScript{authResponse: "535 authentication failed"}},
+		{name: "rcpt rejection", script: fakeSMTPScript{rcptResponse: "550 recipient rejected"}},
+		{name: "data command failure", script: fakeSMTPScript{dataResponse: "554 data rejected"}},
+		{name: "data close failure", script: fakeSMTPScript{dataCloseResponse: "554 not queued"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			imapHost, imapPort := startFakeIMAPServer(t, fakeIMAPScript{
+				onLogin: func(username, password string) string { return "OK LOGIN completed" },
+			})
+			smtpHost, smtpPort := startFakeSMTPServerWithScript(t, tt.script)
+			config := testConfig(t, imapHost, imapPort)
+			config.SMTPHost = smtpHost
+			config.SMTPPort = smtpPort
+			config.SMTPUserFormat = "localpart"
+			server, cookie := loginTestSessionWithPassword(t, config, "mail-password")
+
+			recorder := requestWithServer(t, server, http.MethodPost, "/api/send", strings.NewReader(`{"to":["alice@example.com"],"subject":"Hello","textBody":"Plain message"}`), cookie)
+
+			assertSendBadGateway(t, recorder)
+		})
+	}
+}
+
+func TestSendAppendFailureReturnsGenericBadGatewayAfterSMTP(t *testing.T) {
+	imapHost, imapPort := startFakeIMAPServer(t, fakeIMAPScript{
+		mailboxes: []string{"INBOX", "Sent"},
+		onLogin:   func(username, password string) string { return "OK LOGIN completed" },
+		onAppend: func(mailbox string, message string) string {
+			return "NO secret append failure"
+		},
+	})
+	var smtpData string
+	smtpHost, smtpPort := startFakeSMTPServer(t, nil, &smtpData)
+	config := testConfig(t, imapHost, imapPort)
+	config.SMTPHost = smtpHost
+	config.SMTPPort = smtpPort
+	config.SMTPUserFormat = "localpart"
+	server, cookie := loginTestSessionWithPassword(t, config, "mail-password")
+
+	recorder := requestWithServer(t, server, http.MethodPost, "/api/send", strings.NewReader(`{"to":["alice@example.com"],"subject":"Hello","textBody":"Plain message"}`), cookie)
+
+	assertSendBadGateway(t, recorder)
+	if !strings.Contains(smtpData, "Subject: Hello") {
+		t.Fatalf("smtp data = %q, want SMTP send attempted before append failure", smtpData)
+	}
+}
+
+func TestSendRejectsOversizedMultipartRequest(t *testing.T) {
+	imapHost, imapPort := startFakeIMAPServer(t, fakeIMAPScript{
+		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+	})
+	config := testConfig(t, imapHost, imapPort)
+	server, cookie := loginTestSession(t, config)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("to", `["alice@example.com"]`)
+	_ = writer.WriteField("subject", "Too large")
+	part, err := writer.CreateFormFile("attachments", "large.bin")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := io.Copy(part, io.LimitReader(zeroReader{}, sendRequestMaxBytes+1)); err != nil {
+		t.Fatalf("write large form: %v", err)
+	}
+	_ = writer.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/send", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.AddCookie(cookie)
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+	var response map[string]string
+	decode(t, recorder, &response)
+	if response["error"] != "invalid send request" {
+		t.Fatalf("error = %q, want invalid send request", response["error"])
 	}
 }
 
@@ -1566,6 +2506,53 @@ func slicesEqual(left []string, right []string) bool {
 	return true
 }
 
+func largeMailboxMessages(mailbox string, count int, hour int) map[string]string {
+	messages := make(map[string]string, count)
+	for uid := 1; uid <= count; uid++ {
+		messages[strconv.Itoa(uid)] = strings.Join([]string{
+			"From: Alice <alice@example.com>",
+			"To: Jooseho <jooseho@good-night.co.kr>",
+			fmt.Sprintf("Subject: %s message %02d", mailbox, uid),
+			fmt.Sprintf("Date: Thu, 2 Jul 2026 %02d:%02d:00 +0900", hour, (uid-1)%60),
+			"",
+			"Body.",
+		}, "\r\n")
+	}
+	return messages
+}
+
+func descendingUIDSet(start int, end int) string {
+	uids := make([]string, 0, start-end+1)
+	for uid := start; uid >= end; uid-- {
+		uids = append(uids, strconv.Itoa(uid))
+	}
+	return strings.Join(uids, ",")
+}
+
+func assertSendBadGateway(t *testing.T, recorder *httptest.ResponseRecorder) {
+	t.Helper()
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusBadGateway, recorder.Body.String())
+	}
+	var response map[string]string
+	decode(t, recorder, &response)
+	if response["error"] != "failed to send message" {
+		t.Fatalf("error = %q, want generic send failure", response["error"])
+	}
+	if strings.Contains(recorder.Body.String(), "secret") || strings.Contains(recorder.Body.String(), "rejected") {
+		t.Fatalf("response leaked upstream error: %s", recorder.Body.String())
+	}
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
+}
+
 func findMailboxByLabel(mailboxes []Mailbox, label string) (Mailbox, bool) {
 	for _, mailbox := range mailboxes {
 		if mailbox.Label == label {
@@ -1645,6 +2632,8 @@ type fakeIMAPScript struct {
 	onAppend            func(mailbox string, message string) string
 	onStore             func(mailbox string, uid string, operation string, flag string) string
 	onMove              func(mailbox string, uid string, target string) string
+	onCopy              func(mailbox string, uid string, target string) string
+	onExpunge           func(mailbox string) string
 	onFetch             func(mailbox string, uidSet string, dataItems string)
 	mailboxes           []string
 	mailboxLines        []string
@@ -1792,7 +2781,15 @@ func handleFakeIMAPConn(conn net.Conn, script fakeIMAPScript) {
 				}
 				_, _ = conn.Write([]byte(tag + " " + response + "\r\n"))
 			case "COPY":
-				_, _ = conn.Write([]byte(tag + " OK COPY completed\r\n"))
+				if len(fields) < 5 {
+					_, _ = conn.Write([]byte(tag + " BAD COPY command failed\r\n"))
+					continue
+				}
+				response := "OK COPY completed"
+				if script.onCopy != nil {
+					response = script.onCopy(selectedMailbox, fields[3], unquoteIMAPTestString(fields[4]))
+				}
+				_, _ = conn.Write([]byte(tag + " " + response + "\r\n"))
 			}
 		case "STATUS":
 			if len(fields) < 4 {
@@ -1807,7 +2804,11 @@ func handleFakeIMAPConn(conn net.Conn, script fakeIMAPScript) {
 			}
 			_, _ = fmt.Fprintf(conn, "* STATUS %q (UNSEEN %d)\r\n%s %s\r\n", mailbox, count, tag, response)
 		case "EXPUNGE":
-			_, _ = conn.Write([]byte("* 1 EXPUNGE\r\n" + tag + " OK EXPUNGE completed\r\n"))
+			response := "OK EXPUNGE completed"
+			if script.onExpunge != nil {
+				response = script.onExpunge(selectedMailbox)
+			}
+			_, _ = conn.Write([]byte("* 1 EXPUNGE\r\n" + tag + " " + response + "\r\n"))
 		case "APPEND":
 			if len(fields) < 4 {
 				_, _ = conn.Write([]byte(tag + " BAD APPEND command failed\r\n"))
@@ -1840,10 +2841,43 @@ func handleFakeIMAPConn(conn net.Conn, script fakeIMAPScript) {
 }
 
 func unquoteIMAPTestString(value string) string {
-	return strings.Trim(value, `"`)
+	value = strings.Trim(value, `"`)
+	var builder strings.Builder
+	escaped := false
+	for i := 0; i < len(value); i++ {
+		if escaped {
+			builder.WriteByte(value[i])
+			escaped = false
+			continue
+		}
+		if value[i] == '\\' {
+			escaped = true
+			continue
+		}
+		builder.WriteByte(value[i])
+	}
+	if escaped {
+		builder.WriteByte('\\')
+	}
+	return builder.String()
 }
 
 func startFakeSMTPServer(t *testing.T, authLine *string, data *string) (string, string) {
+	t.Helper()
+	return startFakeSMTPServerWithScript(t, fakeSMTPScript{authLine: authLine, data: data})
+}
+
+type fakeSMTPScript struct {
+	authLine          *string
+	data              *string
+	rcptLines         *[]string
+	authResponse      string
+	rcptResponse      string
+	dataResponse      string
+	dataCloseResponse string
+}
+
+func startFakeSMTPServerWithScript(t *testing.T, script fakeSMTPScript) (string, string) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1866,7 +2900,7 @@ func startFakeSMTPServer(t *testing.T, authLine *string, data *string) (string, 
 			return
 		}
 		defer conn.Close()
-		serveFakeSMTPConn(conn, authLine, data)
+		serveFakeSMTPConn(conn, script)
 	}()
 
 	host, port, err := net.SplitHostPort(listener.Addr().String())
@@ -1900,7 +2934,7 @@ func startFakeImplicitTLSSMTPServer(t *testing.T, authLine *string, data *string
 			return
 		}
 		defer conn.Close()
-		serveFakeSMTPConn(conn, authLine, data)
+		serveFakeSMTPConn(conn, fakeSMTPScript{authLine: authLine, data: data})
 	}()
 
 	host, port, err := net.SplitHostPort(listener.Addr().String())
@@ -1910,7 +2944,7 @@ func startFakeImplicitTLSSMTPServer(t *testing.T, authLine *string, data *string
 	return host, port
 }
 
-func serveFakeSMTPConn(conn net.Conn, authLine *string, data *string) {
+func serveFakeSMTPConn(conn net.Conn, script fakeSMTPScript) {
 	reader := bufio.NewReader(conn)
 	_, _ = conn.Write([]byte("220 fake smtp\r\n"))
 	inData := false
@@ -1923,8 +2957,14 @@ func serveFakeSMTPConn(conn net.Conn, authLine *string, data *string) {
 		line = strings.TrimRight(line, "\r\n")
 		if inData {
 			if line == "." {
-				*data = strings.Join(dataLines, "\n")
-				_, _ = conn.Write([]byte("250 queued\r\n"))
+				if script.data != nil {
+					*script.data = strings.Join(dataLines, "\n")
+				}
+				response := script.dataCloseResponse
+				if response == "" {
+					response = "250 queued"
+				}
+				_, _ = conn.Write([]byte(response + "\r\n"))
 				inData = false
 				continue
 			}
@@ -1935,15 +2975,32 @@ func serveFakeSMTPConn(conn net.Conn, authLine *string, data *string) {
 		case strings.HasPrefix(line, "EHLO"):
 			_, _ = conn.Write([]byte("250-localhost\r\n250 AUTH PLAIN\r\n"))
 		case strings.HasPrefix(line, "AUTH PLAIN "):
-			*authLine = line
-			_, _ = conn.Write([]byte("235 authenticated\r\n"))
+			if script.authLine != nil {
+				*script.authLine = line
+			}
+			response := script.authResponse
+			if response == "" {
+				response = "235 authenticated"
+			}
+			_, _ = conn.Write([]byte(response + "\r\n"))
 		case strings.HasPrefix(line, "MAIL FROM:"):
 			_, _ = conn.Write([]byte("250 ok\r\n"))
 		case strings.HasPrefix(line, "RCPT TO:"):
-			_, _ = conn.Write([]byte("250 ok\r\n"))
+			if script.rcptLines != nil {
+				*script.rcptLines = append(*script.rcptLines, line)
+			}
+			response := script.rcptResponse
+			if response == "" {
+				response = "250 ok"
+			}
+			_, _ = conn.Write([]byte(response + "\r\n"))
 		case line == "DATA":
-			_, _ = conn.Write([]byte("354 send data\r\n"))
-			inData = true
+			response := script.dataResponse
+			if response == "" {
+				response = "354 send data"
+				inData = true
+			}
+			_, _ = conn.Write([]byte(response + "\r\n"))
 		case line == "QUIT":
 			_, _ = conn.Write([]byte("221 bye\r\n"))
 			return

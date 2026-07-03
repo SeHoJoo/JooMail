@@ -24,15 +24,36 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
 - [x] MIME parsing is backend-owned and covered by parser fixtures.
   Evidence: multipart alternative/mixed/related, transfer encoding, charset, sanitize, remote image, attachment tests.
   Verification: `go test ./...`.
+- [x] MIME parser edge fixtures cover deeper nesting and attachment filename edge cases.
+  Evidence: parser tests cover nested mixed inside alternative, related inside alternative, duplicate and missing CIDs, malformed attachment filename fallback, RFC 2231 filenames, long Unicode snippets, and HTML-only messages.
+  Verification: `TestParseRawMessageNestedMixedInsideAlternative`, `TestParseRawMessageRelatedInsideAlternativeMapsCIDImages`, `TestParseRawMessageDuplicateContentIDUsesLastInlineImage`, `TestParseRawMessageMissingRelatedCIDImageIsSanitized`, `TestParseRawMessageMalformedAttachmentFilenameUsesFallback`, `TestParseRawMessageRFC2231EncodedFilename`, `TestParseRawMessageLargeUnicodeSnippetTruncatesByRune`, `TestParseRawMessageHTMLOnlyMessage`; `go test ./internal/httpapi`.
+- [x] HTML sanitizer fixtures cover CSS remote URLs, SVG data images, raster data images, and forms.
+  Evidence: sanitizer tests verify CSS/style remote URLs are stripped, SVG data images are blocked, allowed raster data images remain, and form/input/button elements are removed.
+  Verification: `TestSanitizeMailHTMLRemovesCSSRemoteImageURLs`, `TestSanitizeMailHTMLBlocksSVGDataImages`, `TestSanitizeMailHTMLAllowsRasterDataImages`, `TestSanitizeMailHTMLRemovesForms`; `go test ./internal/httpapi`.
+- [x] Attachment download policy and header-injection behavior are pinned.
+  Evidence: attachment downloads use parsed MIME content type with `application/octet-stream` fallback when absent, and formatted download filenames cannot inject response headers.
+  Verification: `TestMessageAttachmentRouteDownloadsDecodedAttachment`, `TestExtractAttachmentPayloadDefaultsMissingContentType`, `TestMessageAttachmentDownloadFilenameCannotInjectHeaders`; `go test ./internal/httpapi`.
 - [x] SMTP send with attachments and Sent append exists.
   Evidence: `POST /api/send`, `internal/httpapi/smtp.go`, SMTP and append tests.
   Verification: existing send route tests.
+- [x] Send route rejects missing or malformed recipients before SMTP.
+  Evidence: `handleSend` trims To/Cc/Bcc recipients, validates them with the Go standard library, and returns `400` for missing or malformed addresses before opening SMTP; `README.md` documents the policy.
+  Verification: `TestSendRejectsInvalidRecipientsBeforeSMTP`; `go test ./internal/httpapi`.
+- [x] Send route failure surfaces are pinned and generic.
+  Evidence: SMTP auth failure, RCPT rejection, DATA failure, DATA close failure, and Sent append failure return `502 failed to send message` without leaking upstream server text; `README.md` documents the behavior.
+  Verification: `TestSendSMTPFailuresReturnGenericBadGateway`, `TestSendAppendFailureReturnsGenericBadGatewayAfterSMTP`; `go test ./internal/httpapi`.
+- [x] Bcc privacy behavior is pinned.
+  Evidence: route-level SMTP test captures To/Cc/Bcc RCPT commands and confirms generated DATA contains no Bcc header.
+  Verification: `TestSendBccRecipientsDoNotLeakInMessageHeaders`; `go test ./internal/httpapi`.
+- [x] Send request body size is explicitly capped.
+  Evidence: `handleSend` wraps request bodies with `http.MaxBytesReader` at 32 MiB before JSON or multipart parsing; oversized multipart requests return `400 invalid send request`; `README.md` documents the cap.
+  Verification: `TestSendRejectsOversizedMultipartRequest`; `go test ./internal/httpapi`.
 - [x] React UI consumes backend API for product flow after login.
   Evidence: `src/App.tsx` loads `/api/accounts`, message summaries, details, send, move, seen, flagged.
   Verification: `npm run typecheck`.
 - [x] Dev-only QA routes exist for visual states.
-  Evidence: `/?qa=loading`, `/?qa=error`, `/?qa=empty`, `/?qa=search`, `/?qa=search-empty`, `/?qa=multiselect`, `/?qa=compose`.
-  Verification: `docs/qa-ui-states.md` route list and `src/App.tsx` QA state handling.
+  Evidence: `/?qa=loading`, `/?qa=error`, `/?qa=empty`, `/?qa=search`, `/?qa=search-account`, `/?qa=search-empty`, `/?qa=multiselect`, `/?qa=compose`, `/?qa=remote-images-shown`, `/?qa=quoted-expanded`, `/?qa=long-overflow`, `/?qa=many-attachments`, `/?qa=empty-custom-folder`, `/?qa=nested-tree`, `/?qa=mobile-reading-attachments`, `/?qa=compose-cc-bcc`.
+  Verification: `docs/qa-ui-states.md` route list; `src/App.tsx` QA state handling; `npm run typecheck`.
 
 ## Backend Gaps
 
@@ -44,13 +65,41 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Evidence: `GET /api/accounts/{accountID}/mailboxes/{mailboxID}/messages?q=...&scope=mailbox|account` supports mailbox scope and current-account selectable mailbox search without cross-account unified search.
   Verification: `TestMessageSummariesAccountScopeSearchesSelectableMailboxes`; `npm run typecheck`.
 
+- [x] Cover selectable mailbox filtering for account-scope search.
+  Evidence: fake LIST tree coverage proves account-scope search skips `\Noselect` parent mailboxes while searching selectable children.
+  Verification: `TestAccountScopeSearchSkipsNoselectMailboxes`; `go test ./internal/httpapi`.
+
 - [x] Harden IMAP search query quoting and non-ASCII search behavior.
   Evidence: `searchCriteria` trims empty queries to `ALL`, quotes spaces/quotes/parentheses with `quoteIMAPString`, and uses `CHARSET UTF-8` for non-ASCII queries.
   Verification: `TestSearchCriteriaQuotesSpecialCharactersAndNonASCII`; `go test ./...`.
 
+- [x] Add predictable fallback for IMAP servers rejecting `CHARSET UTF-8` search.
+  Evidence: non-ASCII search retries the same `TEXT` query without the charset prefix when the server rejects charset search; `README.md` documents the behavior.
+  Verification: `TestSearchCriteriaWithoutCharsetOnlyStripsUTF8Prefix`, `TestMessageSummariesRetryNonASCIISearchWithoutCharsetWhenRejected`; `go test ./internal/httpapi`.
+
+- [x] Cover IMAP mailbox quoting for names with quotes and backslashes.
+  Evidence: command-capture tests verify SELECT, STATUS, SEARCH, MOVE, COPY fallback, and APPEND paths handle quoted/backslash mailbox names safely.
+  Verification: `TestIMAPMailboxNamesWithQuotesAndBackslashes`; `go test ./internal/httpapi`.
+
+- [x] Cover nested archive/trash move targets.
+  Evidence: move route tests verify encoded nested target mailbox IDs such as `Work/Archive` and `Work/Trash` are decoded and passed to IMAP MOVE.
+  Verification: `TestMessageMoveRouteMovesToNestedArchiveAndTrashTargets`; `go test ./internal/httpapi`.
+
+- [x] Document and test IMAP MOVE fallback behavior.
+  Evidence: `README.md` documents fallback from `UID MOVE` to `UID COPY`, `UID STORE +FLAGS.SILENT (\Deleted)`, and `EXPUNGE`; route tests pin the fallback sequence.
+  Verification: `TestMessageMoveRouteFallsBackToCopyStoreExpunge`; `go test ./internal/httpapi`.
+
+- [x] Defer partial bulk move failure handling until a per-message result policy exists.
+  Evidence: `docs/future-work-100.md` records that current frontend bulk moves use separate move requests with optimistic rollback and need either sequential recovery or a bulk endpoint before changing behavior.
+  Verification: source review of `bulkMoveMessages`; no runtime behavior changed.
+
 - [x] Decide and implement unread count source for accounts and mailboxes.
   Evidence: `handleAccounts` applies live IMAP `STATUS mailbox (UNSEEN)` counts and `accountForSession` sums mailbox unread counts into the account unread total.
   Verification: `TestAccountsPopulateUnreadCountsFromIMAPStatus`; `go test ./...`.
+
+- [x] Harden unread count failure behavior per mailbox.
+  Evidence: route-level fake IMAP coverage confirms one mailbox `STATUS` failure leaves that mailbox at zero while successful mailbox unread counts still populate the account response.
+  Verification: `TestAccountsSkipFailedUnreadCountsPerMailbox`; `go test ./internal/httpapi`.
 
 - [x] Add stronger session-expiry API behavior tests.
   Evidence: route-level expired signed session token test pins generic `401` behavior.
@@ -60,11 +109,51 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Evidence: server-side IMAP search delegates matching to IMAP, fetches only matching UID sets, caps per-mailbox and final account search summaries at `messageSummaryLimit`.
   Verification: `TestMessageSummariesUseServerSideSearchBeforeLimit`, `TestMessageSummariesAccountScopeSearchesSelectableMailboxes`; `go test ./...`.
 
+- [x] Document account-scope search cost limits.
+  Evidence: `README.md` states current-account search runs live IMAP search across selectable mailboxes and caps per-mailbox fetches plus the merged sorted result.
+  Verification: docs diff; no code test required.
+
+- [x] Validate `messageSummaryLimit` behavior with large live-like mailboxes.
+  Evidence: regular mailbox listings fetch the newest 50 UIDs before parsing, and account-scope search caps each selectable mailbox plus the final merged result at `messageSummaryLimit`.
+  Verification: `TestMessageSummariesLimitFetchesNewestUIDs`, `TestAccountScopeSearchCapsPerMailboxAndFinalResults`; `go test ./internal/httpapi`.
+
+- [x] Document the message-list load-more path without changing current response fields.
+  Evidence: `README.md` states current lists return the newest 50 live IMAP matches and future load-more should use optional `limit` plus UID/date cursor query parameters while preserving the `messages` JSON field.
+  Verification: docs diff; no runtime behavior changed.
+
+- [x] Defer envelope-only IMAP summary fetching until response-field parity is designed.
+  Evidence: summaries currently depend on full backend MIME parsing for snippets, attachment presence, decoded headers, and body-derived fallback behavior; `docs/future-work-100.md` records the deferral.
+  Verification: source review of `fetchMessages` and `parseRawMessage`; no runtime behavior changed.
+
 ## Frontend Gaps
 
 - [x] Introduce a tracked search scope control once backend scope exists.
   Evidence: desktop `MessageList` and mobile `MobileInbox` expose current-mailbox/current-account controls and `App` sends `scope=mailbox|account` with search queries.
   Verification: `npm run typecheck`.
+
+- [x] Debounce live search while keeping input responsive.
+  Evidence: `App` keeps immediate search input separate from the API-backed search value and applies a 300ms debounce before live IMAP queries.
+  Verification: `npm run typecheck`; no API contract change.
+
+- [x] Empty search has an explicit reset rule.
+  Evidence: clearing search immediately clears the query, resets search scope to current mailbox, and clears checked message selection.
+  Verification: `npm run typecheck`; `/?qa=search-empty` remains documented.
+
+- [x] Account-scope search results communicate source mailbox and cap.
+  Evidence: desktop and mobile rows show mailbox labels for account-scope results, and result summary copy shows `최신 50건` when the current cap is reached.
+  Verification: `npm run typecheck`; visual QA still recommended.
+
+- [x] Search highlighting covers multiple occurrences.
+  Evidence: `MessageRow.highlight` marks every case-insensitive occurrence in subject/snippet text instead of only the first match.
+  Verification: `npm run typecheck`.
+
+- [x] Decide search scope persistence behavior.
+  Evidence: search scope remains persisted in `joomail:mail-state`, while search text intentionally does not persist across sessions.
+  Verification: documented in `docs/future-work-100.md`; no runtime behavior changed.
+
+- [x] Defer automated search cancellation tests until frontend test setup is approved.
+  Evidence: `App` effects retain stale-response cancellation guards, but no frontend test runner dependency was approved for this batch.
+  Verification: `npm run typecheck`; no dependency added.
 
 - [x] Replace non-virtualized message rendering with a scalable list strategy or document a deliberate deferral.
   Evidence: mobile product rendering no longer caps results with `messages.slice(0, 8)`.
@@ -76,10 +165,38 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Deferred: scroll-position restoration remains deferred until list virtualization or a stable scroll container policy is implemented.
   Verification: `npm run typecheck`.
 
+- [x] Document selected-message restoration QA coverage.
+  Evidence: `docs/qa-ui-states.md` includes a manual checklist item for selected account, mailbox, message, and search scope restoration from `joomail:mail-state`.
+  Verification: docs diff; no runtime behavior changed.
+
 - [x] Complete compose overlay controls from the plan or explicitly defer each missing control.
   Evidence: `ComposePanel` now supports desktop minimize/restore and expand/collapse controls.
   Deferred: Draft persistence and "save to Drafts then close" remain deferred because current phase excludes persistence and no backend Drafts save API exists.
   Verification: `npm run typecheck`.
+
+- [x] Compose protects dirty unsent content from accidental close.
+  Evidence: `ComposePanel` reports dirty state, `App.closeCompose` confirms before discard, and the compose-open history guard routes browser/mobile back through the same confirmation path.
+  Verification: `npm run typecheck`; manual mobile back QA still recommended.
+
+- [x] Compose attachment controls cover remove and total size.
+  Evidence: selected attachment chips have per-file remove buttons backed by the same `File[]` sent to `/api/send`, and the attachment area displays aggregate selected file size.
+  Verification: `npm run typecheck`; manual compose QA checklist updated.
+
+- [x] Compose send button communicates required fields before submit.
+  Evidence: send is disabled until recipients and subject are present, and the footer/title exposes the first missing required field.
+  Verification: `npm run typecheck`; manual compose QA checklist updated.
+
+- [x] Compose send failure keeps retry state visible.
+  Evidence: failed sends preserve compose fields and selected attachments and relabel the send button as `다시 보내기`.
+  Verification: `npm run typecheck`; manual compose QA checklist updated.
+
+- [x] Decide MVP forward attachment policy.
+  Evidence: forwarding remains body-only by default; original attachments are not automatically reattached, and users can manually attach files to avoid hidden large sends.
+  Verification: documented in `docs/future-work-100.md`; no runtime behavior changed.
+
+- [x] Defer reply-all recipient unit tests until frontend test setup is approved.
+  Evidence: `composeInitialState` still filters the current account email, but no frontend test runner dependency was approved for this batch.
+  Verification: `npm run typecheck`; no dependency added.
 
 - [x] Replace hard-coded attachment total size in the reading pane.
   Evidence: `ReadingPane` computes aggregate attachment size from backend-provided attachment size strings and omits the aggregate when parsing is not possible.
@@ -96,6 +213,35 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Deferred: actual screenshot capture for this batch is not recorded because the current workspace has no browser automation dependency and adding one requires approval; use the documented manual/browser-agent flow before release review.
   Verification: docs review; no code verification required.
 
+- [x] Add expanded dev-only QA routes for newer UI states.
+  Evidence: query routes now cover account-scope search, displayed remote images, expanded quoted content, long sender/subject overflow, many attachments, empty custom folder, nested mailbox tree, mobile reading with attachments, and mobile compose with Cc/Bcc open.
+  Verification: `npm run typecheck`; `docs/qa-ui-states.md` route table.
+
+- [x] Document QA verification commands, screenshot policy, smoke checks, and manual accessibility passes.
+  Evidence: `docs/qa-ui-states.md` records the 100-item count command, screenshot storage policy, live IMAP/SMTP/session-expiry smoke checklists, keyboard/icon/contrast review items, 320px mobile review, wide-desktop review, and production smoke recording rules.
+  Deferred: deployed `joomail-v0.1.9` visual QA and live/production smoke execution remain deferred because this batch did not open deployed URLs, use credentials, or run deployment workflows.
+  Verification: `git diff --check`; `rg '^### [0-9]{3}\.' docs/future-work-100.md | wc -l`.
+
+- [x] Account switcher supports keyboard account selection.
+  Evidence: `AccountSwitcher` opens from the trigger, focuses the selected account, supports ArrowUp/ArrowDown/Home/End within the account list, and selects with Enter/Space.
+  Verification: `npm run typecheck`; manual accessibility QA remains recommended.
+
+- [x] Desktop sidebar supports collapsed mode.
+  Evidence: `Sidebar` has an expanded layout and a collapsed 64px icon rail preserving account context, compose access, mailbox shortcuts, unread counts, and an expand control.
+  Verification: `npm run typecheck`; visual QA still needed.
+
+- [x] Tablet layout uses a coherent sidebar/list/reading arrangement.
+  Evidence: the `md` to `<xl` desktop shell uses the 64px sidebar rail while the full sidebar returns at `xl`, and `Toolbar` search/action spacing flexes for tablet widths.
+  Verification: `npm run typecheck`; tablet visual QA still recommended.
+
+- [x] Desktop message rows expose hover/focus actions.
+  Evidence: `MessageRow` shows archive, trash, and mark-unread action buttons on hover/focus and wires them through existing `App` message actions.
+  Verification: `npm run typecheck`; hover visual QA still recommended.
+
+- [x] Desktop list selection supports range and modifier semantics.
+  Evidence: `MessageRow` forwards Shift and Cmd/Ctrl click modifiers, while `App` maintains a last-checked anchor for range selection and toggles individual rows on modifier click.
+  Verification: `npm run typecheck`; manual QA checklist updated.
+
 - [x] Add a recurring source-vs-docs audit entry after each completed development batch.
   Evidence: this checklist was updated alongside backend/frontend changes with evidence, deferrals, and verification notes.
   Verification: `git diff -- docs/development-checklist.md`.
@@ -103,6 +249,11 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
 - [x] Keep README API list synchronized with backend routes.
   Evidence: README endpoint list still matches `Server.routes()` and documents the existing message-list `q` and `scope=mailbox|account` query options.
   Verification: compared `internal/httpapi/server.go` routes against README endpoint list.
+
+- [x] Document release hygiene without triggering deployment.
+  Evidence: README uses the current `joomail-v0.1.10` tag example, documents env var semantics, TLS modes, credential lifecycle, and health response; `docs/release-checklist.md` records pre-release checks, approval-before-tag/deploy guardrails, smoke recording, and the current no-changelog decision.
+  Deferred: rollback procedure docs and CI/deploy workflow annotation work remain approval-blocked.
+  Verification: docs diff only; no deployment workflow, tag, push, or rollback action run.
 
 ## Explicit Non-Goals To Keep Out
 

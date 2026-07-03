@@ -11,13 +11,17 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/mail"
 	"net/smtp"
 	"net/textproto"
 	"strings"
 	"time"
 )
 
-const smtpCommandTimeout = 10 * time.Second
+const (
+	smtpCommandTimeout  = 10 * time.Second
+	sendRequestMaxBytes = 32 << 20
+)
 
 var newSMTPTLSConfig = func(host string) *tls.Config {
 	return &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
@@ -44,13 +48,22 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, sendRequestMaxBytes)
 	var request sendRequest
 	if err := parseSendRequest(r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid send request")
 		return
 	}
-	if len(request.To) == 0 || strings.TrimSpace(request.Subject) == "" {
+	if strings.TrimSpace(request.Subject) == "" {
 		writeError(w, http.StatusBadRequest, "to and subject are required")
+		return
+	}
+	if err := validateRecipients(&request); err != nil {
+		if errors.Is(err, errMissingRecipient) {
+			writeError(w, http.StatusBadRequest, "to and subject are required")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "invalid recipient")
 		return
 	}
 	if err := s.sendMail(auth.credential, request); err != nil {
@@ -130,6 +143,26 @@ func compactRecipients(values []string) []string {
 	return out
 }
 
+var errMissingRecipient = errors.New("missing recipient")
+
+func validateRecipients(request *sendRequest) error {
+	request.To = compactRecipients(request.To)
+	request.Cc = compactRecipients(request.Cc)
+	request.Bcc = compactRecipients(request.Bcc)
+	if len(request.To) == 0 {
+		return errMissingRecipient
+	}
+	recipients := append([]string{}, request.To...)
+	recipients = append(recipients, request.Cc...)
+	recipients = append(recipients, request.Bcc...)
+	for _, recipient := range recipients {
+		if _, err := mail.ParseAddress(recipient); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Server) sendMail(credential storedCredential, request sendRequest) error {
 	if s.config.SMTPHost == "" || s.config.SMTPPort == "" || s.config.SMTPUserFormat != "localpart" {
 		return errors.New("smtp unavailable")
@@ -138,12 +171,6 @@ func (s *Server) sendMail(credential storedCredential, request sendRequest) erro
 	recipients := append([]string{}, request.To...)
 	recipients = append(recipients, request.Cc...)
 	recipients = append(recipients, request.Bcc...)
-	for i, recipient := range recipients {
-		recipients[i] = strings.TrimSpace(recipient)
-		if recipients[i] == "" {
-			return errors.New("empty recipient")
-		}
-	}
 
 	address := net.JoinHostPort(s.config.SMTPHost, s.config.SMTPPort)
 	dialer := &net.Dialer{Timeout: smtpCommandTimeout}
