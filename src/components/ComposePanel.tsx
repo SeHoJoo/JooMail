@@ -11,9 +11,10 @@ type ComposePanelProps = {
   onDirtyChange?: (dirty: boolean) => void;
   onClose: (options?: { force?: boolean }) => void;
   onSend?: (draft: ComposeDraft) => Promise<void>;
+  onSaveDraft?: (draft: ComposeDraft) => Promise<void>;
 };
 
-export function ComposePanel({ accounts, account, mode, message, ccBccOpenByDefault = false, onDirtyChange, onClose, onSend }: ComposePanelProps) {
+export function ComposePanel({ accounts, account, mode, message, ccBccOpenByDefault = false, onDirtyChange, onClose, onSend, onSaveDraft }: ComposePanelProps) {
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [initialDraft, setInitialDraft] = useState(() => composeInitialState(mode, message, account.email));
@@ -29,6 +30,7 @@ export function ComposePanel({ accounts, account, mode, message, ccBccOpenByDefa
   const [sendError, setSendError] = useState("");
   const [draftNotice, setDraftNotice] = useState("");
   const [sending, setSending] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const fromAccount = accounts.find((item) => item.id === fromAccountId) ?? account;
@@ -93,16 +95,7 @@ export function ComposePanel({ accounts, account, mode, message, ccBccOpenByDefa
     setSendError("");
     setDraftNotice("");
     try {
-      await onSend({
-        fromAccountId,
-        fromName: fromAccount.label,
-        to: parseRecipients(recipientText || message?.senderEmail || ""),
-        cc: parseRecipients(ccText),
-        bcc: parseRecipients(bccText),
-        subject,
-        textBody: body,
-        attachments: attachmentFiles,
-      });
+      await onSend(composeDraft());
       onDirtyChange?.(false);
       onClose({ force: true });
     } catch {
@@ -110,6 +103,38 @@ export function ComposePanel({ accounts, account, mode, message, ccBccOpenByDefa
     } finally {
       setSending(false);
     }
+  }
+
+  async function saveDraftAndClose() {
+    if (!onSaveDraft || savingDraft) {
+      showDraftDeferredNotice();
+      return;
+    }
+    setSavingDraft(true);
+    setSendError("");
+    setDraftNotice("");
+    try {
+      await onSaveDraft(composeDraft());
+      onDirtyChange?.(false);
+      onClose({ force: true });
+    } catch {
+      setSendError("임시저장하지 못했습니다. 서버 상태를 확인해 주세요.");
+    } finally {
+      setSavingDraft(false);
+    }
+  }
+
+  function composeDraft(): ComposeDraft {
+    return {
+      fromAccountId,
+      fromName: fromAccount.label,
+      to: parseRecipients(recipientText || message?.senderEmail || ""),
+      cc: parseRecipients(ccText),
+      bcc: parseRecipients(bccText),
+      subject,
+      textBody: body,
+      attachments: attachmentFiles,
+    };
   }
 
   function showDraftDeferredNotice() {
@@ -251,7 +276,7 @@ export function ComposePanel({ accounts, account, mode, message, ccBccOpenByDefa
         </div>
       ) : null}
       <div className="flex h-[46px] shrink-0 items-center border-t border-line px-4">
-        <button className="flex items-center gap-1.5 rounded-[7px] bg-accent py-2 pl-4 pr-3 text-[13px] font-medium text-white disabled:opacity-70" onClick={submitSend} disabled={sending || Boolean(sendDisabledReason)} title={sendDisabledReason || undefined} type="button">
+        <button className="flex items-center gap-1.5 rounded-[7px] bg-accent py-2 pl-4 pr-3 text-[13px] font-medium text-white disabled:opacity-70" onClick={submitSend} disabled={sending || savingDraft || Boolean(sendDisabledReason)} title={sendDisabledReason || undefined} type="button">
           {sending ? "전송 중" : sendError ? "다시 보내기" : "보내기"}
           <Icon name="chevron" className="h-3 w-3" />
         </button>
@@ -260,10 +285,10 @@ export function ComposePanel({ accounts, account, mode, message, ccBccOpenByDefa
             <Icon name="paperclip" className="h-[15px] w-[15px]" />
           </button>
         </div>
-        <button className="ml-5 hidden text-[12px] font-medium text-muted hover:text-text sm:block" onClick={showDraftDeferredNotice} type="button">
-          임시저장
+        <button className="ml-5 hidden text-[12px] font-medium text-muted hover:text-text disabled:opacity-60 sm:block" onClick={saveDraftAndClose} disabled={savingDraft} type="button">
+          {savingDraft ? "저장 중" : "저장 후 닫기"}
         </button>
-        <div className="ml-4 hidden truncate text-[11px] text-muted sm:block">{sendDisabledReason || (draftNotice ? "임시저장 대기" : "작성 중")}</div>
+        <div className="ml-4 hidden truncate text-[11px] text-muted sm:block">{savingDraft ? "임시저장 중" : sendDisabledReason || (draftNotice ? "임시저장 대기" : "작성 중")}</div>
         <input ref={fileInputRef} className="hidden" type="file" multiple onChange={(event) => handleFiles(event.target.files)} />
         <button className="ml-auto flex h-[18px] w-[18px] items-center justify-center text-muted hover:text-text sm:ml-5" aria-label="작성 삭제" onClick={() => onClose()} type="button">
           <Icon name="trash" className="h-[15px] w-[15px]" />
@@ -322,7 +347,7 @@ function composeTitle(mode: ComposeMode) {
   return "새 메일";
 }
 
-function composeInitialState(mode: ComposeMode, message: Message | undefined, accountEmail: string) {
+export function composeInitialState(mode: ComposeMode, message: Message | undefined, accountEmail: string) {
   if (!message || mode === "compose") {
     return { to: "", cc: "", subject: "", body: "" };
   }

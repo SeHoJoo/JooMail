@@ -18,6 +18,10 @@ Use this checklist when capturing visual QA screenshots for development-only UI 
   rg '^### [0-9]{3}\.' docs/future-work-100.md | wc -l
   ```
 - Run `git diff --check` after docs-only QA updates.
+- Run automated local QA route capture when browser tooling is installed:
+  ```sh
+  npm run qa:visual
+  ```
 
 ## Screenshot Storage Policy
 
@@ -28,7 +32,7 @@ Use this checklist when capturing visual QA screenshots for development-only UI 
 
 ## Routes
 
-- `/`
+- `/?qa=normal`
 - `/?qa=loading`
 - `/?qa=error`
 - `/?qa=empty`
@@ -50,7 +54,7 @@ Use these screenshot names:
 
 | Route | Desktop file | Mobile file |
 |---|---|---|
-| `/` | `desktop-normal.png` | `mobile-normal.png` |
+| `/?qa=normal` | `desktop-normal.png` | `mobile-normal.png` |
 | `/?qa=loading` | `desktop-loading.png` | `mobile-loading.png` |
 | `/?qa=error` | `desktop-error.png` | `mobile-error.png` |
 | `/?qa=empty` | `desktop-empty.png` | `mobile-empty.png` |
@@ -164,5 +168,5 @@ Use live smoke checks only against an approved test mailbox. Do not record crede
 | 2026-07-03 | Not run | Deployed `joomail-v0.1.9` | Pending | Deferred | Deployed visual QA was not executed in this workspace; run the route table against the approved deployed URL before release sign-off. |
 | 2026-07-03 | Not run | Live IMAP/SMTP smoke | Pending | Deferred | Live smoke requires approved test credentials and must not record secrets. Use the smoke checklists above. |
 | 2026-07-03 | Not run | Production smoke | Pending | Deferred | Production smoke recording is documented, but no deploy workflow or production check was run in this batch. |
-| 2026-07-03 | Pending | All documented routes | Pending | Deferred | Browser screenshot capture was not run in this batch because the workspace has no browser automation dependency and adding one requires approval. Use the setup and route table above before release review; do not commit screenshots unless requested. |
-| 2026-07-03 | Not run | Expanded route set | Pending | Approval-blocked | `playwright`, `@playwright/test`, and `puppeteer` are not installed, and browser automation dependency approval was not granted. Routes were expanded and typechecked; screenshot capture still requires manual browser-agent execution or approved tooling. |
+| 2026-07-03 | Pending | All documented routes | `docs/qa-screenshots/YYYY-MM-DD/` | Ready | Browser automation is now wired through `npm run qa:visual`; generated screenshots stay ignored unless a reviewer explicitly asks to commit them. |
+| 2026-07-03 | 1440x900, 375x812 | 17 QA routes x 2 viewports | `docs/qa-screenshots/2026-07-03/` | Pass | `npm run qa:visual` passed 34 screenshots locally with Playwright Chromium. |

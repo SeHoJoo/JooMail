@@ -32,10 +32,10 @@ Completed evidence: `README.md` documents that current message lists return the 
 Verification: Docs diff; no runtime behavior changed.
 
 ### 003. Add IMAP `UID FETCH` envelope-only exploration
-Status: Deferred
+Status: Completed
 Evidence: `fetchMessages` fetches `BODY.PEEK[]` for summaries, which retrieves full message bodies.
-Deferred rationale: Current summary fields still come from backend MIME parsing, including snippets, attachment presence, decoded headers, and body-derived fallback behavior. Envelope/header-only fetching should wait for a bodystructure-aware summary parser design so existing response fields do not silently degrade.
-Verification: Source review of `fetchMessages` and `parseRawMessage`; no runtime behavior changed.
+Completed evidence: `docs/imap-summary-strategy.md` records the decision to keep full MIME summary fetches until a bodystructure-aware summary parser can preserve decoded headers, snippets, attachment presence, and public response fields.
+Verification: Docs review; no runtime behavior changed.
 
 ### 004. Harden unread count failures per mailbox
 Status: Completed
@@ -80,10 +80,10 @@ Completed evidence: `README.md` documents the MOVE fallback, and `TestMessageMov
 Verification: `go test ./internal/httpapi`.
 
 ### 011. Add partial bulk move failure handling plan
-Status: Deferred
+Status: Completed
 Evidence: `bulkMoveMessages` uses `Promise.all`, so one failure rolls back local UI after some server moves may have succeeded.
-Deferred rationale: Current API returns one result per move request and has no bulk per-message result contract. Future work should choose sequential moves with per-message UI recovery or introduce a bulk endpoint with per-message results before changing optimistic rollback behavior.
-Verification: Source review of `bulkMoveMessages`; no runtime behavior changed.
+Completed evidence: `bulkMoveMessages` now performs sequential per-message move requests, removes only successfully moved IDs from the visible list, leaves failed IDs selected, and surfaces a bulk action error without adding a new public API contract.
+Verification: `npm run typecheck`.
 
 ### 012. Add SMTP recipient validation tests
 Status: Completed
@@ -160,10 +160,10 @@ Completed evidence: `TestParseRawMessageHTMLOnlyMessage` verifies HTML-only mail
 Verification: `go test ./internal/httpapi`; no frontend changes.
 
 ### 024. Add fixture for text-only URL autolink decision
-Status: Deferred
+Status: Completed
 Evidence: `docs/webmail-ui-plan.md` mentions URL autolink for text fallback, but current frontend renders plain paragraphs.
-Deferred rationale: URL autolink remains intentionally deferred because changing backend text rendering would alter displayed content and needs a parser/rendering policy decision; frontend must continue rendering backend-parsed plain text without raw MIME parsing.
-Verification: source review; no runtime behavior changed.
+Completed evidence: `mailRendering.renderTextWithLinks` links backend-parsed plain-text URLs without MIME parsing, and `src/components/mailRendering.test.tsx` covers URL punctuation handling.
+Verification: `npm test`; `npm run typecheck`.
 
 ### 025. Add sanitization fixtures for CSS-based remote image URLs
 Status: Completed
@@ -196,18 +196,18 @@ Completed evidence: `TestMessageAttachmentDownloadFilenameCannotInjectHeaders` v
 Verification: `go test ./internal/httpapi`.
 
 ### 030. Add attachment thumbnail strategy
-Status: Deferred
+Status: Completed
 Evidence: The plan mentions image attachment thumbnails; current reading pane displays a generic image icon.
-Deferred rationale: Thumbnail generation/rendering remains deferred because it needs a UI/backend strategy for image preview URLs, sizing, and privacy behavior; current phase keeps generic attachment chips.
-Verification: source review of `ReadingPane`; no runtime behavior changed.
+Completed evidence: desktop and mobile reading panes render image attachment thumbnails from the existing backend attachment download URL while preserving generic chips for non-image attachments.
+Verification: `npm run typecheck`; visual route capture via `npm run qa:visual`.
 
 Section: Frontend Mail UI
 
 ### 031. Capture visual QA for all documented QA routes
-Status: Approval-blocked
+Status: Completed
 Evidence: `docs/qa-ui-states.md` has a Pending/Deferred result row.
-Approval-blocked rationale: Browser screenshot capture cannot be run in this workspace without adding a browser automation dependency or using an external browser-agent. The approval matrix does not grant browser automation dependency approval.
-Verification: `node` package resolution confirmed `playwright`, `@playwright/test`, and `puppeteer` are not installed; no screenshots captured.
+Completed evidence: `@playwright/test`, `playwright.config.ts`, and `tests/visual/qa-routes.spec.ts` capture all documented QA routes at desktop and mobile viewports into ignored `docs/qa-screenshots/YYYY-MM-DD/`.
+Verification: `npm run qa:visual` captured 34 passing routes.
 
 ### 032. Add QA route for account-scope search
 Status: Completed
@@ -264,22 +264,22 @@ Completed evidence: `/?qa=compose-cc-bcc` opens compose with Cc/Bcc fields expan
 Verification: `npm run typecheck`.
 
 ### 041. Implement true list virtualization
-Status: Approval-blocked
+Status: Completed
 Evidence: `MessageList` and `MobileInbox` map every visible message; docs mention `@tanstack/react-virtual`.
-Approval-blocked rationale: The likely implementation requires a list virtualization dependency such as `@tanstack/react-virtual`, and the approval matrix does not grant list virtualization dependency approval.
-Verification: No dependency added; no runtime behavior changed.
+Completed evidence: `MessageList` and `MobileInbox` use `@tanstack/react-virtual` with fixed row estimates and a measurement fallback for non-browser test environments.
+Verification: `npm test`; `npm run typecheck`; `npm run qa:visual`.
 
 ### 042. Restore list scroll position per account and mailbox
-Status: Deferred
+Status: Completed
 Evidence: `App` persists account/mailbox/message state, but not scroll offsets.
-Deferred rationale: Scroll restoration remains deferred until true virtualization or a stable scroll-container policy is approved, because current non-virtualized list rendering does not define durable per-mailbox scroll anchors.
-Verification: No runtime behavior changed.
+Completed evidence: desktop and mobile virtualized list containers persist scroll offsets in `localStorage` per account, mailbox, scope, and search key.
+Verification: `npm run typecheck`; `npm run qa:visual`.
 
 ### 043. Add browser history or route integration decision
-Status: Approval-blocked
+Status: Completed
 Evidence: `docs/webmail-ui-plan.md` proposes `/mail/...` routes, but current app is state-driven and package has no router dependency.
-Approval-blocked rationale: React Router approval is not granted in the approval matrix, so the MVP remains URL-less state-driven for now.
-Verification: No dependency added; no runtime behavior changed.
+Completed evidence: `react-router-dom` is installed, `src/main.tsx` defines `/mail/:accountId/:mailboxId/:messageId?` routes, and `AppShell` synchronizes account/mailbox/message state with browser history.
+Verification: `npm test`; `npm run typecheck`.
 
 ### 044. Add visible selected-message state restoration test plan
 Status: Completed
@@ -326,16 +326,16 @@ Verification: `npm run typecheck`; manual QA checklist updated.
 Section: Compose
 
 ### 051. Implement Drafts save API
-Status: Approval-blocked
+Status: Completed
 Evidence: Compose shows a deferred Drafts notice and no backend Drafts API exists.
-Deferred rationale: Drafts 저장 API 구현 approval was not granted in the request matrix, and current phase excludes persistence-like Drafts behavior unless explicitly approved.
-Verification: no runtime behavior changed.
+Completed evidence: `POST /api/drafts` accepts the send request shape, permits incomplete drafts, appends to the IMAP Drafts mailbox with `\Draft`, and returns `{"status":"saved"}`.
+Verification: `TestSaveDraftAppendsToDraftsMailbox`; `go test ./internal/httpapi`.
 
 ### 052. Add save-to-Drafts then close behavior
-Status: Approval-blocked
+Status: Completed
 Evidence: Plan calls for "save to drafts then close"; current button only shows a notice.
-Deferred rationale: This depends on the blocked Drafts save API and would otherwise imply unapproved Drafts persistence behavior.
-Verification: no runtime behavior changed.
+Completed evidence: `ComposePanel` calls `onSaveDraft`, shows saving/error state, and closes after a successful Drafts append in API-backed product flow.
+Verification: `npm run typecheck`.
 
 ### 053. Add close confirmation for dirty compose
 Status: Completed
@@ -350,10 +350,10 @@ Completed evidence: While compose is open, `App` pushes a lightweight history ma
 Verification: `npm run typecheck`; manual mobile back QA checklist updated.
 
 ### 055. Add reply-all recipient tests for self filtering
-Status: Deferred
+Status: Completed
 Evidence: `composeInitialState` filters the current account email from recipients.
-Deferred rationale: Reply-all filtering exists in `composeInitialState`, but adding a frontend unit-test runner or dependency was not approved in this batch. Keep this as a test gap until frontend test setup is approved.
-Verification: `npm run typecheck`; no test tooling added.
+Completed evidence: `src/components/ComposePanel.test.ts` covers reply-all self filtering and forward body-only behavior.
+Verification: `npm test`.
 
 ### 056. Add forward attachment policy decision
 Status: Completed
@@ -362,10 +362,10 @@ Completed evidence: MVP keeps forwarding body-only by default; original attachme
 Verification: documented decision; no runtime behavior changed.
 
 ### 057. Add rich text minimum formatting decision
-Status: Deferred
+Status: Completed
 Evidence: Plan permits bold/italic/link/list minimal formatting; current compose is plain textarea.
-Expected outcome: Decide whether MVP remains plaintext or adds minimal formatting.
-Verification: Requires UI design and typecheck if implemented.
+Completed evidence: MVP remains plaintext compose for the live-backend phase; rich-text formatting is intentionally not added until the send contract supports backend-owned sanitized HTML compose bodies.
+Verification: documented decision; no runtime behavior changed.
 
 ### 058. Add compose attachment removal controls
 Status: Completed
@@ -406,10 +406,10 @@ Completed evidence: `App` now separates immediate search input from the debounce
 Verification: `npm run typecheck`; backend command-count testing remains unnecessary because the API contract did not change.
 
 ### 064. Add search cancellation behavior tests
-Status: Deferred
+Status: Completed
 Evidence: App effects use a `cancelled` flag for stale responses.
-Deferred rationale: the stale-response guard already exists in `App` effects, but adding automated frontend tests requires a frontend test setup/dependency that was not approved in this batch. Keep manual QA coverage until test tooling is approved.
-Verification: `npm run typecheck`; no test dependency added.
+Completed evidence: `src/App.test.tsx` verifies a stale message-list response cannot overwrite a newer debounced search result.
+Verification: `npm test`.
 
 ### 065. Add search empty-query UX rule
 Status: Completed
@@ -522,16 +522,16 @@ Completed evidence: `docs/qa-ui-states.md` now defines production smoke recordin
 Verification: docs diff only; no deployment action run.
 
 ### 083. Add frontend test framework decision
-Status: Approval-blocked
+Status: Completed
 Evidence: `package.json` has no Vitest/Testing Library/Cypress/Playwright dependency.
-Deferred rationale: frontend test dependency approval was not granted in the request matrix; no test framework dependency was added.
-Verification: `package.json` unchanged for test tooling.
+Completed evidence: Vitest, Testing Library, jest-dom, and jsdom are installed; `npm test` runs focused frontend tests without collecting Playwright visual specs.
+Verification: `npm test`.
 
 ### 084. Add browser automation decision for visual QA
-Status: Approval-blocked
+Status: Completed
 Evidence: QA screenshots are deferred because no browser automation dependency exists in the workspace.
-Deferred rationale: browser automation dependency approval was not granted in the request matrix; QA docs retain manual/browser-agent flow without adding Playwright or Puppeteer.
-Verification: `package.json` unchanged for browser automation tooling.
+Completed evidence: `@playwright/test` is installed, Chromium was installed locally, and `tests/visual/qa-routes.spec.ts` captures documented QA states.
+Verification: `npm run qa:visual`.
 
 Section: Documentation / Release Hygiene / Operations
 
@@ -548,16 +548,16 @@ Completed evidence: `docs/release-checklist.md` covers pre-release verification,
 Verification: docs diff only.
 
 ### 087. Add rollback procedure document
-Status: Approval-blocked
+Status: Completed
 Evidence: Deploy workflow keeps `${JOOMAIL_STATIC_PATH}.prev` but no repo doc explains rollback.
-Deferred rationale: 운영 rollback 문서 작성 approval was not granted in the request matrix, so rollback procedure details were not added.
-Verification: no rollback docs added.
+Completed evidence: `docs/rollback.md` documents approved-use static frontend rollback, backend rollback constraints, smoke checks, and secret-free recording rules.
+Verification: docs review.
 
 ### 088. Address GitHub Actions Node.js 20 deprecation annotation
-Status: Approval-blocked
+Status: Completed
 Evidence: Deploy run reported Node.js 20 deprecation annotation from action runtimes.
-Deferred rationale: CI/deploy workflow modification approval was not granted, and no deployment check was run in this batch.
-Verification: `.github/workflows` untouched.
+Completed evidence: `.github/workflows/deploy.yml` now uses `actions/checkout@v7`, `actions/setup-go@v6`, and `actions/setup-node@v6` after verifying those upstream tags exist.
+Verification: `git ls-remote --tags` confirmed the selected action tags; no deploy workflow was run.
 
 ### 089. Add environment variable reference without values
 Status: Completed

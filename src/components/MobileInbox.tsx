@@ -1,10 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Account, Mailbox, Message, MockMode, SearchScope } from "../types";
 import { Icon } from "./Icon";
 import { highlight } from "./MessageRow";
 import { EmptyState, ErrorState, LoadingState } from "./StateViews";
+import { attachmentURL, htmlContentClassName, renderTextWithLinks } from "./mailRendering";
 
 const ACCOUNT_SEARCH_RESULT_CAP = 50;
+const MOBILE_ROW_HEIGHT = 94;
+const SCROLL_KEY_PREFIX = "joomail:mobile-list-scroll:";
 
 type MobileInboxProps = {
   account: Account;
@@ -17,6 +21,7 @@ type MobileInboxProps = {
   searchInput: string;
   searchScope: SearchScope;
   mode: MockMode;
+  scrollKey: string;
   showRemoteImagesByDefault: boolean;
   forceReadingId?: string;
   folderMenuOpenByDefault?: boolean;
@@ -35,10 +40,11 @@ type MobileInboxProps = {
   onLogout?: () => void;
 };
 
-export function MobileInbox({ account, messages, selectedMessage, selectedId, selectedMailboxId, checkedIds, search, searchInput, searchScope, mode, showRemoteImagesByDefault, forceReadingId = "", folderMenuOpenByDefault = false, onRetry, onCompose, onReply, onSearch, onSearchScopeChange, onSelectMessage, onSelectMailbox, onToggleChecked, onToggleFlagged, onClearChecked, onBulkArchive, onBulkTrash, onLogout }: MobileInboxProps) {
+export function MobileInbox({ account, messages, selectedMessage, selectedId, selectedMailboxId, checkedIds, search, searchInput, searchScope, mode, scrollKey, showRemoteImagesByDefault, forceReadingId = "", folderMenuOpenByDefault = false, onRetry, onCompose, onReply, onSearch, onSearchScopeChange, onSelectMessage, onSelectMailbox, onToggleChecked, onToggleFlagged, onClearChecked, onBulkArchive, onBulkTrash, onLogout }: MobileInboxProps) {
   const [readingId, setReadingId] = useState(forceReadingId);
   const [folderMenuOpen, setFolderMenuOpen] = useState(folderMenuOpenByDefault);
   const [searchOpen, setSearchOpen] = useState(Boolean(search || searchInput));
+  const scrollRef = useRef<HTMLDivElement>(null);
   const mailboxTitle = findMailbox(account.mailboxes, selectedMailboxId)?.label ?? "받은편지함";
   const title = search ? "검색 결과" : mailboxTitle;
   const checkedCount = checkedIds.size;
@@ -48,6 +54,20 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, se
   const emptyDescription = search ? "검색어를 확인해주세요" : "새 메일이 도착하면 여기에 표시됩니다";
   const readingMessage = readingId && selectedMessage?.id === readingId ? selectedMessage : messages.find((message) => message.id === readingId);
   const accountSearchCapped = Boolean(search) && searchScope === "account" && messages.length >= ACCOUNT_SEARCH_RESULT_CAP;
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => MOBILE_ROW_HEIGHT,
+    overscan: 6,
+  });
+  const virtualRows = virtualizer.getVirtualItems();
+  const renderedRows = virtualRows.length
+    ? virtualRows
+    : messages.map((_, index) => ({
+        index,
+        size: MOBILE_ROW_HEIGHT,
+        start: index * MOBILE_ROW_HEIGHT,
+      }));
 
   useEffect(() => {
     if (readingId && !messages.some((message) => message.id === readingId)) {
@@ -66,6 +86,18 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, se
   useEffect(() => {
     if (search || searchInput) setSearchOpen(true);
   }, [search, searchInput]);
+
+  useEffect(() => {
+    const top = Number(localStorage.getItem(`${SCROLL_KEY_PREFIX}${scrollKey}`));
+    if (Number.isFinite(top) && scrollRef.current) {
+      scrollRef.current.scrollTop = top;
+    }
+  }, [scrollKey]);
+
+  function saveScrollPosition() {
+    if (!scrollRef.current) return;
+    localStorage.setItem(`${SCROLL_KEY_PREFIX}${scrollKey}`, String(scrollRef.current.scrollTop));
+  }
 
   if (readingMessage) {
     return <MobileReadingPane message={readingMessage} showRemoteImagesByDefault={showRemoteImagesByDefault} onBack={() => setReadingId("")} onReply={onReply} onToggleFlagged={onToggleFlagged} />;
@@ -137,7 +169,7 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, se
           </button>
         </div>
       ) : null}
-      <div className="mt-7">
+      <div ref={scrollRef} className="mt-7 max-h-[calc(100vh-190px)] overflow-y-auto" onScroll={saveScrollPosition}>
         {mode === "loading" ? (
           <div className="h-[calc(100vh-166px)]">
             <LoadingState />
@@ -153,50 +185,56 @@ export function MobileInbox({ account, messages, selectedMessage, selectedId, se
             <EmptyState title={emptyTitle} description={emptyDescription} />
           </div>
         ) : null}
-        {mode === "normal" ? messages.map((message) => {
-          const checked = checkedIds.has(message.id);
-          return (
-          <button
-            key={message.id}
-            className={[
-              "relative flex h-[94px] w-full border-b border-line text-left focus-visible:z-10 focus-visible:outline-offset-[-2px]",
-              selectedId === message.id ? "bg-selected" : "bg-white",
-              checked ? "bg-selected/70" : "",
-            ].join(" ")}
-            data-message-id={message.id}
-            onClick={() => {
-              onSelectMessage(message.id);
-              setReadingId(message.id);
-            }}
-          >
-            {selectedId === message.id ? <span className="absolute left-0 top-0 h-full w-0.5 bg-accent" /> : null}
-            {message.unread ? <span className="absolute left-[50px] top-[30px] h-[7px] w-[7px] rounded-full bg-accent" /> : null}
-            <span className="block">
-              <input
-                aria-label={`${message.sender} 선택`}
-                className="absolute left-[18px] top-[39px] h-[15px] w-[15px] accent-accent"
-                checked={checked}
-                onClick={(event) => event.stopPropagation()}
-                onChange={() => onToggleChecked(message.id)}
-                type="checkbox"
-              />
-            </span>
-            <span className="absolute left-[60px] top-2 flex h-11 w-11 items-center justify-center rounded-full bg-selected text-[13px] font-bold text-accent data-[muted=true]:bg-[#e6e8eb] data-[muted=true]:text-[#828891]" data-muted={!message.unread}>
-              {message.initials}
-            </span>
-            <span className="absolute left-[108px] right-[84px] top-2 truncate text-[15px] text-ink data-[unread=true]:font-bold data-[unread=false]:font-semibold" data-unread={message.unread}>
-              {message.sender}
-            </span>
-            <span className="absolute right-6 top-2 text-[12.5px] data-[unread=true]:font-medium data-[unread=true]:text-accent data-[unread=false]:text-muted" data-unread={message.unread}>
-              {message.time}
-            </span>
-            <span className="absolute left-[108px] right-12 top-8 truncate text-[13.5px] text-ink">{highlight(message.subject, search)}</span>
-            {message.hasAttachment ? <Icon name="paperclip" className="absolute right-8 top-[33px] h-3.5 w-3.5 text-muted" /> : null}
-            <span className={["absolute left-[108px] top-[55px] truncate text-[12.5px] text-[#a2a8b0]", search && searchScope === "account" ? "right-[104px]" : "right-6"].join(" ")}>{highlight(message.snippet, search)}</span>
-            {search && searchScope === "account" ? <span className="absolute right-6 top-[55px] max-w-[72px] truncate rounded bg-[#f2f3f5] px-1.5 py-0.5 text-[10.5px] leading-3 text-muted">{findMailbox(account.mailboxes, message.mailboxId)?.label ?? message.mailboxId}</span> : null}
-          </button>
-          );
-        }) : null}
+        {mode === "normal" && messages.length ? (
+          <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
+            {renderedRows.map((virtualRow) => {
+              const message = messages[virtualRow.index];
+              const checked = checkedIds.has(message.id);
+              return (
+                <button
+                  key={message.id}
+                  className={[
+                    "absolute left-0 top-0 flex h-[94px] w-full border-b border-line text-left focus-visible:z-10 focus-visible:outline-offset-[-2px]",
+                    selectedId === message.id ? "bg-selected" : "bg-white",
+                    checked ? "bg-selected/70" : "",
+                  ].join(" ")}
+                  style={{ transform: `translateY(${virtualRow.start}px)` }}
+                  data-message-id={message.id}
+                  onClick={() => {
+                    onSelectMessage(message.id);
+                    setReadingId(message.id);
+                  }}
+                >
+                  {selectedId === message.id ? <span className="absolute left-0 top-0 h-full w-0.5 bg-accent" /> : null}
+                  {message.unread ? <span className="absolute left-[50px] top-[30px] h-[7px] w-[7px] rounded-full bg-accent" /> : null}
+                  <span className="block">
+                    <input
+                      aria-label={`${message.sender} 선택`}
+                      className="absolute left-[18px] top-[39px] h-[15px] w-[15px] accent-accent"
+                      checked={checked}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={() => onToggleChecked(message.id)}
+                      type="checkbox"
+                    />
+                  </span>
+                  <span className="absolute left-[60px] top-2 flex h-11 w-11 items-center justify-center rounded-full bg-selected text-[13px] font-bold text-accent data-[muted=true]:bg-[#e6e8eb] data-[muted=true]:text-[#828891]" data-muted={!message.unread}>
+                    {message.initials}
+                  </span>
+                  <span className="absolute left-[108px] right-[84px] top-2 truncate text-[15px] text-ink data-[unread=true]:font-bold data-[unread=false]:font-semibold" data-unread={message.unread}>
+                    {message.sender}
+                  </span>
+                  <span className="absolute right-6 top-2 text-[12.5px] data-[unread=true]:font-medium data-[unread=true]:text-accent data-[unread=false]:text-muted" data-unread={message.unread}>
+                    {message.time}
+                  </span>
+                  <span className="absolute left-[108px] right-12 top-8 truncate text-[13.5px] text-ink">{highlight(message.subject, search)}</span>
+                  {message.hasAttachment ? <Icon name="paperclip" className="absolute right-8 top-[33px] h-3.5 w-3.5 text-muted" /> : null}
+                  <span className={["absolute left-[108px] top-[55px] truncate text-[12.5px] text-[#a2a8b0]", search && searchScope === "account" ? "right-[104px]" : "right-6"].join(" ")}>{highlight(message.snippet, search)}</span>
+                  {search && searchScope === "account" ? <span className="absolute right-6 top-[55px] max-w-[72px] truncate rounded bg-[#f2f3f5] px-1.5 py-0.5 text-[10.5px] leading-3 text-muted">{findMailbox(account.mailboxes, message.mailboxId)?.label ?? message.mailboxId}</span> : null}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
       <button className="fixed bottom-10 right-6 flex h-14 w-14 items-center justify-center rounded-[18px] bg-accent text-white shadow-[0_8px_20px_rgba(45,100,216,0.42)]" aria-label="새 메일 쓰기" onClick={onCompose}>
         <Icon name="compose" className="h-[22px] w-[22px]" />
@@ -383,21 +421,26 @@ function MobileReadingPane({ message, showRemoteImagesByDefault, onBack, onReply
           </div>
         ) : null}
         {message.htmlBody ? (
-          <div className="mt-6 text-[14px] leading-6 text-text [&_a]:text-accent [&_a]:underline [&_img:not([src])]:hidden [&_img]:max-w-full [&_li]:mb-1 [&_ol]:mb-4 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-4 [&_ul]:mb-4 [&_ul]:list-disc [&_ul]:pl-5" dangerouslySetInnerHTML={{ __html: htmlBody }} />
+          <div className={`mt-6 text-[14px] leading-6 ${htmlContentClassName}`} dangerouslySetInnerHTML={{ __html: htmlBody }} />
         ) : (
           <div className="mt-6 space-y-4 text-[14px] leading-6 text-text">
-            {message.body.length ? message.body.map((paragraph, index) => <p key={`${index}-${paragraph}`}>{paragraph}</p>) : <p className="text-muted">본문을 불러오는 중입니다.</p>}
+            {message.body.length ? message.body.map((paragraph, index) => <p key={`${index}-${paragraph}`}>{renderTextWithLinks(paragraph)}</p>) : <p className="text-muted">본문을 불러오는 중입니다.</p>}
           </div>
         )}
         {message.attachments?.length ? (
           <div className="mt-6 space-y-2">
-            {message.attachments.map((attachment) => (
-              <a key={`${attachment.id ?? attachment.name}-${attachment.size}`} className="flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-[12.5px] text-text" href={attachment.id ? `/api/messages/${encodeURIComponent(message.id)}/attachments/${encodeURIComponent(attachment.id)}` : undefined} download={attachment.name}>
-                <Icon name="paperclip" className="h-4 w-4 shrink-0 text-muted" />
+            {message.attachments.map((attachment) => {
+              const href = attachmentURL(message, attachment);
+              return (
+              <a key={`${attachment.id ?? attachment.name}-${attachment.size}`} className="flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-[12.5px] text-text" href={href} download={attachment.name}>
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[#eaf0f6] text-accent">
+                  {attachment.type === "image" && href ? <img className="h-full w-full object-cover" src={href} alt="" loading="lazy" /> : <Icon name="paperclip" className="h-4 w-4" />}
+                </span>
                 <span className="min-w-0 flex-1 truncate">{attachment.name}</span>
                 <span className="shrink-0 text-muted">{attachment.size}</span>
               </a>
-            ))}
+              );
+            })}
           </div>
         ) : null}
       </article>

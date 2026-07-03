@@ -167,17 +167,29 @@ func (c *imapClient) appendSentMessage(raw string) error {
 	if mailboxName == "" {
 		mailboxName = "Sent"
 	}
-	return c.appendMessage(mailboxName, raw)
+	return c.appendMessage(mailboxName, raw, "(\\Seen)")
 }
 
-func (c *imapClient) appendMessage(mailboxName string, raw string) error {
+func (c *imapClient) appendDraftMessage(raw string) error {
+	names, err := c.listMailboxNames()
+	if err != nil {
+		return err
+	}
+	mailboxName := draftsMailboxName(names)
+	if mailboxName == "" {
+		mailboxName = "Drafts"
+	}
+	return c.appendMessage(mailboxName, raw, "(\\Draft)")
+}
+
+func (c *imapClient) appendMessage(mailboxName string, raw string, flags string) error {
 	c.next++
 	tag := fmt.Sprintf("A%03d", c.next)
 	if err := c.conn.SetDeadline(time.Now().Add(imapCommandTimeout)); err != nil {
 		return err
 	}
 	literal := []byte(raw)
-	if _, err := fmt.Fprintf(c.conn, "%s APPEND %s (\\Seen) {%d}\r\n", tag, quoteIMAPString(mailboxName), len(literal)); err != nil {
+	if _, err := fmt.Fprintf(c.conn, "%s APPEND %s %s {%d}\r\n", tag, quoteIMAPString(mailboxName), flags, len(literal)); err != nil {
 		return err
 	}
 	for {
@@ -771,6 +783,15 @@ func sentMailboxName(names []string) string {
 	return ""
 }
 
+func draftsMailboxName(names []string) string {
+	for _, name := range names {
+		if isDraftsMailboxName(name) {
+			return name
+		}
+	}
+	return ""
+}
+
 func isSentMailboxName(name string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(name))
 	switch normalized {
@@ -778,6 +799,15 @@ func isSentMailboxName(name string) bool {
 		return true
 	}
 	return strings.HasSuffix(normalized, "/sent") || strings.HasSuffix(normalized, ".sent")
+}
+
+func isDraftsMailboxName(name string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	switch normalized {
+	case "draft", "drafts":
+		return true
+	}
+	return strings.HasSuffix(normalized, "/drafts") || strings.HasSuffix(normalized, ".drafts") || strings.HasSuffix(normalized, "/draft") || strings.HasSuffix(normalized, ".draft")
 }
 
 func parseListMailboxName(line string) (string, string, bool) {
@@ -1378,10 +1408,14 @@ func sanitizeMailHTML(value string) (string, bool) {
 	value = blockRemoteImageSources(value)
 	policy := bluemonday.NewPolicy()
 	policy.AllowStandardURLs()
-	policy.AllowElements("a", "b", "blockquote", "br", "code", "div", "em", "hr", "i", "img", "li", "ol", "p", "pre", "span", "strong", "table", "tbody", "td", "th", "thead", "tr", "u", "ul")
-	policy.AllowAttrs("href").OnElements("a")
+	policy.AllowElements("a", "b", "big", "blockquote", "br", "center", "code", "del", "div", "em", "font", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "img", "ins", "li", "ol", "p", "pre", "s", "small", "span", "strike", "strong", "sub", "sup", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "u", "ul")
+	policy.AllowAttrs("href", "name", "target", "title").OnElements("a")
 	policy.AllowAttrs("alt", "data-joomail-remote-src", "height", "width").OnElements("img")
 	policy.AllowAttrs("src").Matching(dataImageSrcPattern).OnElements("img")
+	policy.AllowAttrs("align").OnElements("div", "h1", "h2", "h3", "h4", "h5", "h6", "p", "table", "td", "th", "tr")
+	policy.AllowAttrs("bgcolor", "border", "cellpadding", "cellspacing", "height", "valign", "width").OnElements("table", "td", "th", "tr")
+	policy.AllowAttrs("colspan", "rowspan").OnElements("td", "th")
+	policy.AllowAttrs("color", "face", "size").OnElements("font")
 	policy.AllowDataURIImages()
 	return policy.Sanitize(value), remoteImagesBlocked
 }

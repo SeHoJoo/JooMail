@@ -1,10 +1,13 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Mailbox, Message, MockMode, SearchScope } from "../types";
 import { Icon } from "./Icon";
 import { EmptyState, ErrorState, LoadingState } from "./StateViews";
 import { MessageRow } from "./MessageRow";
 
 const ACCOUNT_SEARCH_RESULT_CAP = 50;
+const ROW_HEIGHT = 64;
+const SCROLL_KEY_PREFIX = "joomail:message-list-scroll:";
 
 type MessageListProps = {
   title: string;
@@ -16,6 +19,7 @@ type MessageListProps = {
   search: string;
   searchScope: SearchScope;
   mode: MockMode;
+  scrollKey: string;
   onRetry: () => void;
   onSearchScopeChange: (scope: SearchScope) => void;
   onSelectMessage: (id: string, options?: { shift: boolean; toggle: boolean }) => void;
@@ -31,13 +35,40 @@ type MessageListProps = {
   onClearChecked: () => void;
 };
 
-export function MessageList({ title, unreadCount, messages, mailboxes, selectedId, checkedIds, search, searchScope, mode, onRetry, onSearchScopeChange, onSelectMessage, onToggleAllChecked, onToggleChecked, onToggleFlagged, onArchive, onTrash, onMarkUnread, onBulkArchive, onBulkTrash, onBulkMove, onClearChecked }: MessageListProps) {
+export function MessageList({ title, unreadCount, messages, mailboxes, selectedId, checkedIds, search, searchScope, mode, scrollKey, onRetry, onSearchScopeChange, onSelectMessage, onToggleAllChecked, onToggleChecked, onToggleFlagged, onArchive, onTrash, onMarkUnread, onBulkArchive, onBulkTrash, onBulkMove, onClearChecked }: MessageListProps) {
   const checkedCount = checkedIds.size;
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [actionError, setActionError] = useState("");
+  const scrollRef = useRef<HTMLDivElement>(null);
   const allVisibleChecked = messages.length > 0 && messages.every((message) => checkedIds.has(message.id));
   const moveTargets = mailboxes.filter((mailbox) => mailbox.kind !== "starred" && mailbox.selectable !== false);
   const accountSearchCapped = Boolean(search) && searchScope === "account" && messages.length >= ACCOUNT_SEARCH_RESULT_CAP;
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 8,
+  });
+  const virtualRows = virtualizer.getVirtualItems();
+  const renderedRows = virtualRows.length
+    ? virtualRows
+    : messages.map((_, index) => ({
+        index,
+        size: ROW_HEIGHT,
+        start: index * ROW_HEIGHT,
+      }));
+
+  useEffect(() => {
+    const top = Number(localStorage.getItem(`${SCROLL_KEY_PREFIX}${scrollKey}`));
+    if (Number.isFinite(top) && scrollRef.current) {
+      scrollRef.current.scrollTop = top;
+    }
+  }, [scrollKey]);
+
+  function saveScrollPosition() {
+    if (!scrollRef.current) return;
+    localStorage.setItem(`${SCROLL_KEY_PREFIX}${scrollKey}`, String(scrollRef.current.scrollTop));
+  }
 
   return (
     <section className="flex min-w-[320px] shrink-0 flex-col border-r border-line bg-white" style={{ width: "var(--list-width)" }}>
@@ -106,30 +137,36 @@ export function MessageList({ title, unreadCount, messages, mailboxes, selectedI
           </div>
         </div>
       ) : null}
-      <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto" onScroll={saveScrollPosition}>
         {mode === "loading" ? <LoadingState /> : null}
         {mode === "error" ? <ErrorState onRetry={onRetry} /> : null}
         {mode === "normal" && messages.length === 0 ? (
           <EmptyState title={search ? "검색 결과가 없습니다" : "받은편지함이 비어 있습니다"} description={search ? "검색어를 확인해주세요" : "새 메일이 도착하면 여기에 표시됩니다"} />
         ) : null}
-        {mode === "normal"
-          ? messages.map((message) => (
-              <MessageRow
-                key={message.id}
-                message={message}
-                selected={selectedId === message.id}
-                checked={checkedIds.has(message.id)}
-                search={search}
-                metaLabel={search && searchScope === "account" ? mailboxLabel(mailboxes, message.mailboxId) : undefined}
-                onSelect={(options) => onSelectMessage(message.id, options)}
-                onToggleChecked={() => onToggleChecked(message.id)}
-                onToggleFlagged={() => onToggleFlagged(message)}
-                onArchive={() => onArchive(message)}
-                onTrash={() => onTrash(message)}
-                onMarkUnread={() => onMarkUnread(message)}
-              />
-            ))
-          : null}
+        {mode === "normal" && messages.length ? (
+          <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
+            {renderedRows.map((virtualRow) => {
+              const message = messages[virtualRow.index];
+              return (
+                <div key={message.id} className="absolute left-0 top-0 w-full" style={{ height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` }}>
+                  <MessageRow
+                    message={message}
+                    selected={selectedId === message.id}
+                    checked={checkedIds.has(message.id)}
+                    search={search}
+                    metaLabel={search && searchScope === "account" ? mailboxLabel(mailboxes, message.mailboxId) : undefined}
+                    onSelect={(options) => onSelectMessage(message.id, options)}
+                    onToggleChecked={() => onToggleChecked(message.id)}
+                    onToggleFlagged={() => onToggleFlagged(message)}
+                    onArchive={() => onArchive(message)}
+                    onTrash={() => onTrash(message)}
+                    onMarkUnread={() => onMarkUnread(message)}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
     </section>
   );

@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { Mailbox, Message, MockMode } from "../types";
 import { EmptyState, ErrorState, LoadingState } from "./StateViews";
 import { Icon } from "./Icon";
+import { attachmentURL, htmlContentClassName, renderTextWithLinks } from "./mailRendering";
 
 type ReadingPaneProps = {
   message?: Message;
@@ -163,12 +164,12 @@ export function ReadingPane({ message, mode, mailboxes, showRemoteImagesByDefaul
           </div>
         ) : null}
         {message.htmlBody ? (
-          <article className="max-w-[750px] text-sm leading-[1.5] text-text [&_a]:text-accent [&_a]:underline [&_img:not([src])]:hidden [&_img]:max-w-full [&_li]:mb-1 [&_ol]:mb-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-5 [&_ul]:mb-5 [&_ul]:list-disc [&_ul]:pl-5" dangerouslySetInnerHTML={{ __html: htmlBody }} />
+          <article className={`max-w-[820px] text-sm leading-[1.5] ${htmlContentClassName}`} dangerouslySetInnerHTML={{ __html: htmlBody }} />
         ) : (
           <article className="max-w-[750px] whitespace-pre-line text-sm leading-[1.5] text-text">
             {bodySections.visible.slice(0, 3).map((paragraph) => (
               <p key={paragraph} className="mb-5">
-                {paragraph}
+                {renderTextWithLinks(paragraph)}
               </p>
             ))}
             {message.bullets ? (
@@ -180,7 +181,7 @@ export function ReadingPane({ message, mode, mailboxes, showRemoteImagesByDefaul
             ) : null}
             {bodySections.visible.slice(3).map((paragraph) => (
               <p key={paragraph} className="mb-5">
-                {paragraph}
+                {renderTextWithLinks(paragraph)}
               </p>
             ))}
             {message.link ? (
@@ -194,10 +195,12 @@ export function ReadingPane({ message, mode, mailboxes, showRemoteImagesByDefaul
           <div className="mt-8">
             <div className="mb-3 text-xs text-muted">첨부파일 {message.attachments.length}개{attachmentTotal ? ` · ${attachmentTotal}` : ""}</div>
             <div className="flex flex-wrap gap-3">
-              {message.attachments.map((attachment) => (
-                <a key={attachment.id ?? attachment.name} className="flex h-[52px] w-[220px] items-center rounded-lg border border-line bg-white px-2 hover:bg-[#f7f8f9]" href={attachment.id ? `/api/messages/${encodeURIComponent(message.id)}/attachments/${encodeURIComponent(attachment.id)}` : undefined} download={attachment.name}>
-                  <div className={attachment.type === "pdf" ? "flex h-[34px] w-[34px] items-center justify-center rounded-md bg-[#fdecec] text-[#e9564f]" : "flex h-[34px] w-[34px] items-center justify-center rounded-md bg-[#eaf0f6] text-accent"}>
-                    <Icon name={attachment.type === "image" ? "image" : "mail"} className="h-4 w-4" />
+              {message.attachments.map((attachment) => {
+                const href = attachmentURL(message, attachment);
+                return (
+                <a key={attachment.id ?? attachment.name} className="flex min-h-[52px] w-[236px] items-center rounded-lg border border-line bg-white px-2 py-2 hover:bg-[#f7f8f9]" href={href} download={attachment.name}>
+                  <div className={attachment.type === "pdf" ? "flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-md bg-[#fdecec] text-[#e9564f]" : "flex h-[38px] w-[38px] shrink-0 items-center justify-center overflow-hidden rounded-md bg-[#eaf0f6] text-accent"}>
+                    {attachment.type === "image" && href ? <img className="h-full w-full object-cover" src={href} alt="" loading="lazy" /> : <Icon name={attachment.type === "image" ? "image" : "mail"} className="h-4 w-4" />}
                   </div>
                   <div className="ml-2 min-w-0 flex-1">
                     <div className="truncate text-[12.5px] font-medium text-ink">{attachment.name}</div>
@@ -205,7 +208,8 @@ export function ReadingPane({ message, mode, mailboxes, showRemoteImagesByDefaul
                   </div>
                   <Icon name="download" className="h-3.5 w-3.5 text-muted" />
                 </a>
-              ))}
+                );
+              })}
             </div>
           </div>
         ) : null}

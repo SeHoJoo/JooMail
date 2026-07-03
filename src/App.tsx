@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { accounts as mockAccounts, messages as mockMessages } from "./data";
 import type { Account, ComposeDraft, ComposeMode, Mailbox, Message, MockMode, SearchScope } from "./types";
 import { ComposePanel } from "./components/ComposePanel";
@@ -88,14 +89,17 @@ type AppShellProps = {
 
 export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   const useApi = Boolean(initialAccounts);
+  const navigate = useNavigate();
+  const routeParams = useParams<{ accountId?: string; mailboxId?: string; messageId?: string }>();
   const initialAccountList = initialAccounts ?? mockAccounts;
   const restoredMailState = loadMailState(initialAccountList);
-  const initialAccountId = restoredMailState.activeAccountId ?? initialAccountList[0].id;
-  const initialMailboxId = restoredMailState.byAccount[initialAccountId]?.mailboxId ?? "inbox";
+  const routeAccountId = useApi && routeParams.accountId && initialAccountList.some((account) => account.id === routeParams.accountId) ? routeParams.accountId : "";
+  const initialAccountId = routeAccountId || restoredMailState.activeAccountId || initialAccountList[0].id;
+  const initialMailboxId = useApi && routeParams.mailboxId ? routeParams.mailboxId : restoredMailState.byAccount[initialAccountId]?.mailboxId ?? "inbox";
   const [accounts, setAccounts] = useState<Account[]>(initialAccountList);
   const [accountId, setAccountId] = useState(initialAccountId);
   const [mailboxId, setMailboxId] = useState(initialMailboxId);
-  const [selectedMessageId, setSelectedMessageId] = useState(useApi ? restoredMailState.byAccount[initialAccountId]?.messageId ?? "" : restoredMailState.byAccount[initialAccountId]?.messageId ?? "m1");
+  const [selectedMessageId, setSelectedMessageId] = useState(useApi ? routeParams.messageId ?? restoredMailState.byAccount[initialAccountId]?.messageId ?? "" : restoredMailState.byAccount[initialAccountId]?.messageId ?? "m1");
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [lastCheckedId, setLastCheckedId] = useState("");
   const [searchInput, setSearchInput] = useState("");
@@ -164,6 +168,46 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   useEffect(() => {
     localStorage.setItem(ACCOUNT_NAMES_KEY, JSON.stringify(accountNames));
   }, [accountNames]);
+
+  useEffect(() => {
+    if (!useApi) return;
+    if (!routeParams.accountId || !accounts.some((account) => account.id === routeParams.accountId)) return;
+    if (routeParams.accountId !== accountId) {
+      setAccountId(routeParams.accountId);
+      setMailboxId(routeParams.mailboxId ?? "inbox");
+      setSelectedMessageId(routeParams.messageId ?? "");
+      setSelectedMessageDetail(undefined);
+      setSearchInput("");
+      setSearch("");
+      setCheckedIds(new Set());
+      setLastCheckedId("");
+      return;
+    }
+    if (routeParams.mailboxId && routeParams.mailboxId !== mailboxId) {
+      setMailboxId(routeParams.mailboxId);
+      setSelectedMessageId(routeParams.messageId ?? "");
+      setSelectedMessageDetail(undefined);
+      setSearchInput("");
+      setSearch("");
+      setCheckedIds(new Set());
+      setLastCheckedId("");
+      return;
+    }
+    if ((routeParams.messageId ?? "") !== selectedMessageId) {
+      setSelectedMessageId(routeParams.messageId ?? "");
+    }
+  }, [accountId, accounts, mailboxId, routeParams.accountId, routeParams.mailboxId, routeParams.messageId, selectedMessageId, useApi]);
+
+  useEffect(() => {
+    if (!useApi || !accountId || !mailboxId) return;
+    const encodedAccount = encodeURIComponent(accountId);
+    const encodedMailbox = encodeURIComponent(mailboxId);
+    const encodedMessage = selectedMessageId ? `/${encodeURIComponent(selectedMessageId)}` : "";
+    const nextPath = `/mail/${encodedAccount}/${encodedMailbox}${encodedMessage}`;
+    if (window.location.pathname !== nextPath) {
+      navigate(`${nextPath}${window.location.search}`, { replace: true });
+    }
+  }, [accountId, mailboxId, navigate, selectedMessageId, useApi]);
 
   useEffect(() => {
     const nextState = {
@@ -593,6 +637,38 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     }
   }
 
+  async function saveDraft(draft: ComposeDraft) {
+    try {
+      const fromAccount = displayAccounts.find((account) => account.id === draft.fromAccountId);
+      const configuredFromName = fromAccount ? accountNames[fromAccount.email]?.trim() : "";
+      const nextDraft = { ...draft, fromName: configuredFromName };
+      if (draft.attachments?.length) {
+        const formData = new FormData();
+        formData.set("fromAccountId", nextDraft.fromAccountId);
+        formData.set("fromName", nextDraft.fromName ?? "");
+        formData.set("to", JSON.stringify(nextDraft.to));
+        formData.set("cc", JSON.stringify(nextDraft.cc));
+        formData.set("bcc", JSON.stringify(nextDraft.bcc));
+        formData.set("subject", nextDraft.subject);
+        formData.set("textBody", nextDraft.textBody);
+        nextDraft.attachments?.forEach((file) => formData.append("attachments", file, file.name));
+        await apiJSON("/api/drafts", {
+          method: "POST",
+          body: formData,
+        });
+      } else {
+        await apiJSON("/api/drafts", {
+          method: "POST",
+          body: JSON.stringify(nextDraft),
+        });
+      }
+      setReloadToken((value) => value + 1);
+    } catch (error) {
+      if (isUnauthorized(error)) onSessionExpired?.();
+      throw error;
+    }
+  }
+
   function updateAccountName(email: string, value: string) {
     setAccountNames((current) => {
       const next = { ...current };
@@ -789,28 +865,35 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
       setSelectedMessageId("");
       return;
     }
-    const selectedIds = new Set(selectedMessages.map((message) => message.id));
-    const previousMessages = apiMessages;
-    const previousDetail = selectedMessageDetail;
-    const previousSelectedId = selectedMessageId;
-    setApiMessages((current) => current.filter((message) => !selectedIds.has(message.id)));
-    setSelectedMessageDetail((current) => (current && selectedIds.has(current.id) ? undefined : current));
-    setSelectedMessageId((current) => (selectedIds.has(current) ? "" : current));
-    try {
-      await Promise.all(
-        selectedMessages.map((message) =>
-          apiJSON(`/api/messages/${encodeURIComponent(message.id)}/move`, {
-            method: "POST",
-            body: JSON.stringify({ mailboxId: targetMailboxId }),
-          }),
-        ),
-      );
-    } catch (error) {
-      setApiMessages(previousMessages);
-      setSelectedMessageDetail(previousDetail);
-      setSelectedMessageId(previousSelectedId);
-      if (isUnauthorized(error)) onSessionExpired?.();
-      throw error;
+    const movedIds = new Set<string>();
+    let unauthorized = false;
+    for (const message of selectedMessages) {
+      try {
+        await apiJSON(`/api/messages/${encodeURIComponent(message.id)}/move`, {
+          method: "POST",
+          body: JSON.stringify({ mailboxId: targetMailboxId }),
+        });
+        movedIds.add(message.id);
+      } catch (error) {
+        if (isUnauthorized(error)) unauthorized = true;
+      }
+    }
+    if (movedIds.size) {
+      setApiMessages((current) => current.filter((message) => !movedIds.has(message.id)));
+      setSelectedMessageDetail((current) => (current && movedIds.has(current.id) ? undefined : current));
+      setSelectedMessageId((current) => (movedIds.has(current) ? "" : current));
+      setCheckedIds((current) => {
+        const next = new Set(current);
+        movedIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    }
+    if (unauthorized) {
+      onSessionExpired?.();
+      throw new Error("session expired");
+    }
+    if (movedIds.size !== selectedMessages.length) {
+      throw new Error("some messages failed to move");
     }
   }
 
@@ -846,6 +929,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         searchInput={searchInput}
         searchScope={searchScope}
         mode={mode}
+        scrollKey={`${accountId}:${mailboxId}:${searchScope}:${search}`}
         showRemoteImagesByDefault={showRemoteImagesByDefault}
         forceReadingId={forceMobileReadingId}
         folderMenuOpenByDefault={forceMobileFolderOpen}
@@ -886,6 +970,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
             search={search}
             searchScope={searchScope}
             mode={mode}
+            scrollKey={`${accountId}:${mailboxId}:${searchScope}:${search}`}
             onRetry={retry}
             onSearchScopeChange={handleSearchScope}
             onSelectMessage={selectMessage}
@@ -931,7 +1016,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         />
       ) : null}
       {addAccountOpen ? <AddAccountModal onClose={() => setAddAccountOpen(false)} onAdded={refreshAccounts} /> : null}
-      {composeOpen ? <ComposePanel accounts={displayAccounts} account={selectedAccount} mode={composeMode} message={composeMessage} ccBccOpenByDefault={forceComposeCcBcc} onDirtyChange={updateComposeDirty} onClose={closeCompose} onSend={useApi ? sendDraft : undefined} /> : null}
+      {composeOpen ? <ComposePanel accounts={displayAccounts} account={selectedAccount} mode={composeMode} message={composeMessage} ccBccOpenByDefault={forceComposeCcBcc} onDirtyChange={updateComposeDirty} onClose={closeCompose} onSend={useApi ? sendDraft : undefined} onSaveDraft={useApi ? saveDraft : undefined} /> : null}
       {import.meta.env.DEV && !composeOpen ? <DevStateSwitcher states={QA_STATES} onApply={applyQaState} /> : null}
     </div>
   );

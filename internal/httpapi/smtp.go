@@ -73,6 +73,24 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
 }
 
+func (s *Server) handleSaveDraft(w http.ResponseWriter, r *http.Request) {
+	auth, ok := s.requireCredential(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, sendRequestMaxBytes)
+	var request sendRequest
+	if err := parseSendRequest(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid draft request")
+		return
+	}
+	if err := s.saveDraft(auth.credential, request); err != nil {
+		writeError(w, http.StatusBadGateway, "failed to save draft")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}
+
 func parseSendRequest(r *http.Request, request *sendRequest) error {
 	contentType := r.Header.Get("Content-Type")
 	mediaType, _, _ := mime.ParseMediaType(contentType)
@@ -236,6 +254,15 @@ func (s *Server) appendSentMessage(credential storedCredential, message string) 
 	}
 	defer client.Close()
 	return client.appendSentMessage(message)
+}
+
+func (s *Server) saveDraft(credential storedCredential, request sendRequest) error {
+	client, err := openIMAPSession(s.config, credential)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return client.appendDraftMessage(formatOutgoingMessage(credential.Email, request))
 }
 
 func smtpImplicitTLS(config Config) bool {

@@ -90,8 +90,8 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Verification: `TestMessageMoveRouteFallsBackToCopyStoreExpunge`; `go test ./internal/httpapi`.
 
 - [x] Defer partial bulk move failure handling until a per-message result policy exists.
-  Evidence: `docs/future-work-100.md` records that current frontend bulk moves use separate move requests with optimistic rollback and need either sequential recovery or a bulk endpoint before changing behavior.
-  Verification: source review of `bulkMoveMessages`; no runtime behavior changed.
+  Evidence: `bulkMoveMessages` now uses sequential per-message move requests, removes successfully moved messages from local state, leaves failed messages selected, and surfaces a bulk action error without adding a new API response contract.
+  Verification: `npm run typecheck`.
 
 - [x] Decide and implement unread count source for accounts and mailboxes.
   Evidence: `handleAccounts` applies live IMAP `STATUS mailbox (UNSEEN)` counts and `accountForSession` sums mailbox unread counts into the account unread total.
@@ -122,8 +122,8 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Verification: docs diff; no runtime behavior changed.
 
 - [x] Defer envelope-only IMAP summary fetching until response-field parity is designed.
-  Evidence: summaries currently depend on full backend MIME parsing for snippets, attachment presence, decoded headers, and body-derived fallback behavior; `docs/future-work-100.md` records the deferral.
-  Verification: source review of `fetchMessages` and `parseRawMessage`; no runtime behavior changed.
+  Evidence: summaries currently keep full MIME fetches because response fields depend on backend parsing; `docs/imap-summary-strategy.md` records the bodystructure-aware future path before any envelope-only switch.
+  Verification: docs review; no runtime behavior changed.
 
 ## Frontend Gaps
 
@@ -151,19 +151,22 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Evidence: search scope remains persisted in `joomail:mail-state`, while search text intentionally does not persist across sessions.
   Verification: documented in `docs/future-work-100.md`; no runtime behavior changed.
 
-- [x] Defer automated search cancellation tests until frontend test setup is approved.
-  Evidence: `App` effects retain stale-response cancellation guards, but no frontend test runner dependency was approved for this batch.
-  Verification: `npm run typecheck`; no dependency added.
+- [x] Cover automated search cancellation behavior.
+  Evidence: `src/App.test.tsx` verifies a stale message-list response cannot overwrite a newer debounced search result.
+  Verification: `npm test`.
 
 - [x] Replace non-virtualized message rendering with a scalable list strategy or document a deliberate deferral.
-  Evidence: mobile product rendering no longer caps results with `messages.slice(0, 8)`.
-  Deferred: true virtualization remains deferred because the plan recommends a new dependency such as `@tanstack/react-virtual`, and dependency additions require approval.
-  Verification: `npm run typecheck`.
+  Evidence: desktop `MessageList` and mobile `MobileInbox` render visible rows with `@tanstack/react-virtual` and keep a fixed-row fallback for non-browser test environments.
+  Verification: `npm test`; `npm run typecheck`; `npm run qa:visual`.
 
 - [x] Add account/mailbox state restoration policy.
   Evidence: `App` persists active account, per-account mailbox, selected message, and search scope in `localStorage` under `joomail:mail-state`.
-  Deferred: scroll-position restoration remains deferred until list virtualization or a stable scroll container policy is implemented.
-  Verification: `npm run typecheck`.
+  Evidence: desktop and mobile list scroll positions persist per account, mailbox, search scope, and search text key.
+  Verification: `npm run typecheck`; `npm run qa:visual`.
+
+- [x] Add browser route integration for account, mailbox, and selected message.
+  Evidence: React Router routes `/mail/:accountId/:mailboxId` and `/mail/:accountId/:mailboxId/:messageId` are defined, and `AppShell` synchronizes route params with selected product state.
+  Verification: `npm test`; `npm run typecheck`.
 
 - [x] Document selected-message restoration QA coverage.
   Evidence: `docs/qa-ui-states.md` includes a manual checklist item for selected account, mailbox, message, and search scope restoration from `joomail:mail-state`.
@@ -171,8 +174,8 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
 
 - [x] Complete compose overlay controls from the plan or explicitly defer each missing control.
   Evidence: `ComposePanel` now supports desktop minimize/restore and expand/collapse controls.
-  Deferred: Draft persistence and "save to Drafts then close" remain deferred because current phase excludes persistence and no backend Drafts save API exists.
-  Verification: `npm run typecheck`.
+  Evidence: Draft save is implemented through `POST /api/drafts`; `ComposePanel` saves then closes on successful Drafts append and keeps retryable error state on failure.
+  Verification: `TestSaveDraftAppendsToDraftsMailbox`; `go test ./internal/httpapi`; `npm run typecheck`.
 
 - [x] Compose protects dirty unsent content from accidental close.
   Evidence: `ComposePanel` reports dirty state, `App.closeCompose` confirms before discard, and the compose-open history guard routes browser/mobile back through the same confirmation path.
@@ -194,13 +197,21 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Evidence: forwarding remains body-only by default; original attachments are not automatically reattached, and users can manually attach files to avoid hidden large sends.
   Verification: documented in `docs/future-work-100.md`; no runtime behavior changed.
 
-- [x] Defer reply-all recipient unit tests until frontend test setup is approved.
-  Evidence: `composeInitialState` still filters the current account email, but no frontend test runner dependency was approved for this batch.
-  Verification: `npm run typecheck`; no dependency added.
+- [x] Add compose recipient policy unit tests.
+  Evidence: `src/components/ComposePanel.test.ts` verifies reply-all self filtering and body-only forward initialization.
+  Verification: `npm test`.
+
+- [x] Decide rich-text compose policy for MVP.
+  Evidence: compose remains plaintext in the live-backend phase; rich-text formatting is deferred until a backend-owned sanitized HTML send contract exists.
+  Verification: documented in `docs/future-work-100.md`; no runtime behavior changed.
 
 - [x] Replace hard-coded attachment total size in the reading pane.
   Evidence: `ReadingPane` computes aggregate attachment size from backend-provided attachment size strings and omits the aggregate when parsing is not possible.
   Verification: `npm run typecheck`.
+
+- [x] Render text URLs and image attachment previews without frontend MIME parsing.
+  Evidence: `mailRendering.renderTextWithLinks` autolinks backend-parsed text bodies, and desktop/mobile reading panes display image attachment thumbnails through the existing backend attachment download route.
+  Verification: `npm test`; `npm run typecheck`; `npm run qa:visual`.
 
 - [x] Add real quoted-content handling or mark as deferred.
   Evidence: `ReadingPane` detects parsed plain-text quote starts (`>` and `On ... wrote:`), hides quoted paragraphs by default, and expands only when quoted content exists.
@@ -209,9 +220,8 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
 ## QA And Documentation Gaps
 
 - [x] Run and record visual QA screenshots for all documented QA routes.
-  Evidence: `docs/qa-ui-states.md` now includes a QA results log section for date, viewport coverage, screenshot location, and blockers.
-  Deferred: actual screenshot capture for this batch is not recorded because the current workspace has no browser automation dependency and adding one requires approval; use the documented manual/browser-agent flow before release review.
-  Verification: docs review; no code verification required.
+  Evidence: `tests/visual/qa-routes.spec.ts` captures all documented QA routes at desktop and mobile viewport sizes into ignored `docs/qa-screenshots/YYYY-MM-DD/`, and the QA results log records the local capture.
+  Verification: `npm run qa:visual`.
 
 - [x] Add expanded dev-only QA routes for newer UI states.
   Evidence: query routes now cover account-scope search, displayed remote images, expanded quoted content, long sender/subject overflow, many attachments, empty custom folder, nested mailbox tree, mobile reading with attachments, and mobile compose with Cc/Bcc open.
@@ -252,8 +262,8 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
 
 - [x] Document release hygiene without triggering deployment.
   Evidence: README uses the current `joomail-v0.1.10` tag example, documents env var semantics, TLS modes, credential lifecycle, and health response; `docs/release-checklist.md` records pre-release checks, approval-before-tag/deploy guardrails, smoke recording, and the current no-changelog decision.
-  Deferred: rollback procedure docs and CI/deploy workflow annotation work remain approval-blocked.
-  Verification: docs diff only; no deployment workflow, tag, push, or rollback action run.
+  Evidence: `docs/rollback.md` documents rollback steps, and `.github/workflows/deploy.yml` uses current major action tags verified from upstream.
+  Verification: docs diff; `git ls-remote --tags` for selected action tags; no deployment workflow, tag, push, or rollback action run.
 
 ## Explicit Non-Goals To Keep Out
 

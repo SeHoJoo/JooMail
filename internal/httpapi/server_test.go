@@ -57,6 +57,7 @@ func TestProtectedRoutesRejectMissingSession(t *testing.T) {
 		{http.MethodPatch, "/api/messages/inbox.1/seen", `{"seen":false}`},
 		{http.MethodPost, "/api/messages/inbox.1/move", `{"mailboxId":"mbox_QXJjaGl2ZQ"}`},
 		{http.MethodPost, "/api/send", `{"to":["a@example.com"],"subject":"Hi","textBody":"Hello"}`},
+		{http.MethodPost, "/api/drafts", `{"textBody":"Draft"}`},
 		{http.MethodPost, "/api/logout", ""},
 	} {
 		t.Run(test.method+" "+test.path, func(t *testing.T) {
@@ -990,7 +991,7 @@ func TestIMAPMailboxNamesWithQuotesAndBackslashes(t *testing.T) {
 	if err := client.moveMessage(messageID(mailboxID(sourceMailbox), "7"), mailboxID(targetMailbox)); err != nil {
 		t.Fatalf("move message: %v", err)
 	}
-	if err := client.appendMessage(targetMailbox, rawMessage); err != nil {
+	if err := client.appendMessage(targetMailbox, rawMessage, "(\\Seen)"); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -1942,6 +1943,21 @@ func TestSanitizeMailHTMLRemovesForms(t *testing.T) {
 	}
 }
 
+func TestSanitizeMailHTMLPreservesCommonEmailLayoutAttributes(t *testing.T) {
+	htmlBody, _ := sanitizeMailHTML(`<h2 align="center">Title</h2><table width="640" cellpadding="8" cellspacing="0" border="1" bgcolor="#ffffff"><tr><td align="right" valign="top" colspan="2"><font color="#333333" size="3">Cell</font></td></tr></table><script>alert(1)</script><p style="color:red">Safe</p>`)
+
+	for _, want := range []string{`<h2 align="center">Title</h2>`, `width="640"`, `cellpadding="8"`, `cellspacing="0"`, `border="1"`, `bgcolor="#ffffff"`, `align="right"`, `valign="top"`, `colspan="2"`, `<font color="#333333" size="3">Cell</font>`} {
+		if !strings.Contains(htmlBody, want) {
+			t.Fatalf("htmlBody = %q, missing preserved layout %q", htmlBody, want)
+		}
+	}
+	for _, blocked := range []string{"script", "style="} {
+		if strings.Contains(strings.ToLower(htmlBody), blocked) {
+			t.Fatalf("htmlBody = %q, contains blocked content %q", htmlBody, blocked)
+		}
+	}
+}
+
 func TestParseRawMessageTransferEncodings(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -2143,6 +2159,38 @@ func TestSendBccRecipientsDoNotLeakInMessageHeaders(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(smtpData), "\nbcc:") {
 		t.Fatalf("smtp data leaked bcc header: %s", smtpData)
+	}
+}
+
+func TestSaveDraftAppendsToDraftsMailbox(t *testing.T) {
+	var appendedMailbox string
+	var appendedMessage string
+	var appendLines []string
+	imapHost, imapPort := startFakeIMAPServer(t, fakeIMAPScript{
+		mailboxes:   []string{"INBOX", "Drafts", "Sent"},
+		appendLines: &appendLines,
+		onLogin:     func(username, password string) string { return "OK LOGIN completed" },
+		onAppend: func(mailbox string, message string) string {
+			appendedMailbox = mailbox
+			appendedMessage = message
+			return "OK APPEND completed"
+		},
+	})
+	server, cookie := loginTestSessionWithPassword(t, testConfig(t, imapHost, imapPort), "mail-password")
+
+	recorder := requestWithServer(t, server, http.MethodPost, "/api/drafts", strings.NewReader(`{"subject":"","textBody":"Partial draft"}`), cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if appendedMailbox != "Drafts" {
+		t.Fatalf("appended mailbox = %q, want Drafts", appendedMailbox)
+	}
+	if !strings.Contains(appendedMessage, "Partial draft") {
+		t.Fatalf("appended message = %q, want draft body", appendedMessage)
+	}
+	if len(appendLines) != 1 || !strings.Contains(appendLines[0], `(\Draft)`) {
+		t.Fatalf("append lines = %#v, want Draft flag", appendLines)
 	}
 }
 
@@ -2635,6 +2683,7 @@ type fakeIMAPScript struct {
 	onCopy              func(mailbox string, uid string, target string) string
 	onExpunge           func(mailbox string) string
 	onFetch             func(mailbox string, uidSet string, dataItems string)
+	appendLines         *[]string
 	mailboxes           []string
 	mailboxLines        []string
 	messages            map[string]map[string]string
@@ -2810,6 +2859,9 @@ func handleFakeIMAPConn(conn net.Conn, script fakeIMAPScript) {
 			}
 			_, _ = conn.Write([]byte("* 1 EXPUNGE\r\n" + tag + " " + response + "\r\n"))
 		case "APPEND":
+			if script.appendLines != nil {
+				*script.appendLines = append(*script.appendLines, line)
+			}
 			if len(fields) < 4 {
 				_, _ = conn.Write([]byte(tag + " BAD APPEND command failed\r\n"))
 				continue

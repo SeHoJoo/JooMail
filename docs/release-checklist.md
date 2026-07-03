@@ -25,11 +25,15 @@ explicit approval in the current conversation.
   ```
 - Review `docs/qa-ui-states.md` and record any manual visual QA or live smoke
   blockers before release sign-off.
+- If visual QA is in scope, run:
+  ```sh
+  npm run qa:visual
+  ```
 
 ## Release
 
 - Bump version metadata only when the release scope requires it.
-- Use an approved release tag such as `joomail-v0.1.10`.
+- Use an approved release tag such as `joomail-v0.1.11`.
 - Push the release tag only after explicit approval.
 - Watch the GitHub Actions deploy run only after an approved deploy trigger.
 
@@ -38,8 +42,8 @@ explicit approval in the current conversation.
 - Record deploy run URL or release identifier in `docs/qa-ui-states.md`.
 - Record live smoke status without credentials or message contents.
 - If smoke fails, capture the failing check and stop for an approved remediation
-  plan. Rollback procedure documentation is approval-gated and intentionally not
-  included here.
+  plan. Use `docs/rollback.md` only after an explicit production rollback
+  approval.
 
 ## Changelog Decision
 

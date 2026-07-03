@@ -43,6 +43,7 @@ Initial API endpoints:
 - `PATCH /api/messages/{messageID}/seen`
 - `POST /api/messages/{messageID}/move`
 - `POST /api/send`
+- `POST /api/drafts`
 
 `POST /api/send` trims To/Cc/Bcc recipients and rejects missing or malformed
 addresses with `400` before opening an SMTP connection. Bcc recipients are used
@@ -51,6 +52,11 @@ Send requests are capped at 32 MiB. SMTP auth, recipient, DATA, and Sent append
 failures return the generic `502 failed to send message` response. A Sent append
 failure currently fails the API response after SMTP delivery instead of adding a
 new warning field to the response contract.
+
+`POST /api/drafts` accepts the same JSON or multipart shape as `POST /api/send`,
+but permits incomplete recipients or subject. It appends the generated message to
+the account's Drafts mailbox with the IMAP `\Draft` flag and returns
+`{"status":"saved"}`.
 
 Message list responses currently return the newest 50 live IMAP matches. Future
 load-more support should extend this route with optional query parameters such
@@ -75,8 +81,8 @@ server pattern.
 Deploy manually from GitHub Actions, or push a release tag:
 
 ```sh
-git tag joomail-v0.1.10
-git push origin joomail-v0.1.10
+git tag joomail-v0.1.11
+git push origin joomail-v0.1.11
 ```
 
 The workflow builds the Vite frontend, builds the Go backend, installs artifacts
