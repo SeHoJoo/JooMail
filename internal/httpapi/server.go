@@ -41,6 +41,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/messages/{messageID}/move", s.handleMessageMove)
 	s.mux.HandleFunc("POST /api/send", s.handleSend)
 	s.mux.HandleFunc("POST /api/drafts", s.handleSaveDraft)
+	s.mux.HandleFunc("GET /api/accounts/{accountID}/rules", s.handleRules)
+	s.mux.HandleFunc("PUT /api/accounts/{accountID}/rules", s.handleSaveRules)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

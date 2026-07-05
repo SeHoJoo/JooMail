@@ -1,7 +1,7 @@
 # JooMail Future Work 100
 
-Last audited: 2026-07-03  
-Audit basis: `AGENTS.md`, `.agents/skills/joomail-orchestrator/SKILL.md`, `README.md`, `package.json`, `docs/webmail-ui-plan.md`, `docs/development-checklist.md`, `docs/qa-ui-states.md`, `.github/workflows/deploy.yml`, `internal/httpapi/server.go`, `internal/httpapi/imap.go`, `internal/httpapi/smtp.go`, `internal/httpapi/login.go`, `internal/httpapi/session.go`, `internal/httpapi/server_test.go`, `src/App.tsx`, `src/types.ts`, `src/components/MessageList.tsx`, `src/components/MobileInbox.tsx`, `src/components/ReadingPane.tsx`, `src/components/ComposePanel.tsx`, `src/components/Toolbar.tsx`, `src/components/Sidebar.tsx`
+Last audited: 2026-07-04
+Audit basis: `AGENTS.md`, `.agents/skills/joomail-orchestrator/SKILL.md`, `README.md`, `package.json`, `docs/webmail-ui-plan.md`, `docs/development-checklist.md`, `docs/qa-ui-states.md`, `.github/workflows/deploy.yml`, `internal/httpapi/server.go`, `internal/httpapi/imap.go`, `internal/httpapi/smtp.go`, `internal/httpapi/managesieve.go`, `internal/httpapi/login.go`, `internal/httpapi/session.go`, `internal/httpapi/server_test.go`, `internal/httpapi/managesieve_test.go`, `src/App.tsx`, `src/types.ts`, `src/components/MessageList.tsx`, `src/components/MobileInbox.tsx`, `src/components/ReadingPane.tsx`, `src/components/ComposePanel.tsx`, `src/components/Toolbar.tsx`, `src/components/Sidebar.tsx`
 
 ## Rules
 
@@ -13,7 +13,7 @@ Audit basis: `AGENTS.md`, `.agents/skills/joomail-orchestrator/SKILL.md`, `READM
 
 ## Summary
 
-The deployed `joomail-v0.1.9` baseline has live IMAP/SMTP product flow, backend-owned MIME parsing, search scope, unread counts, compose send, and the source-vs-plan checklist closed. The highest-value remaining work is visual QA capture, scalable list rendering, scroll-state restoration, Drafts behavior, deeper IMAP/SMTP hardening, mobile parity, and release/documentation hygiene. Several items below require approval because they touch dependencies, persistence, CI/deploy, background sync, or server configuration.
+The deployed `joomail-v0.1.13` baseline has live IMAP/SMTP product flow, backend-owned MIME parsing, search scope, unread counts, compose send, conversation threading metadata, and ManageSieve-backed rules with a minimal settings UI. The highest-value remaining work is scheduled-send/undo-send design, live-server smoke coverage, and continued release/documentation hygiene. Several items below require approval because they touch dependencies, persistence, CI/deploy, background sync, or server configuration.
 
 ## 100-Item Backlog
 
@@ -595,7 +595,7 @@ Evidence: `GET /api/health` returns `{"status":"ok"}`.
 Completed evidence: README now documents `GET /api/health` returning `{"status":"ok"}` for smoke checks.
 Verification: docs diff only.
 
-Section: Non-goal Guardrails
+Section: Phase Scope Updates / Remaining Guardrails
 
 ### 095. Keep unified inbox excluded
 Status: Non-goal guardrail
@@ -603,23 +603,24 @@ Evidence: `docs/webmail-ui-plan.md` explicitly excludes unified inbox and accoun
 Expected outcome: Future tasks do not add cross-account product flows without a separate product decision.
 Verification: Preserved as a non-goal guardrail; no implementation added.
 
-### 096. Keep conversation threading excluded
-Status: Non-goal guardrail
-Evidence: Plan excludes thread view and keeps IMAP folders as flat lists.
-Expected outcome: Do not add References/In-Reply-To thread grouping in current phase.
-Verification: Preserved as a non-goal guardrail; no implementation added.
+### 096. Add conversation threading metadata foundation
+Status: Completed
+Evidence: Product decision now includes conversation threading in phase scope.
+Completed evidence: Backend message parsing now normalizes `Message-ID`, `In-Reply-To`, and `References`, derives a stable `threadId`, exposes it in parsed JSON, and the reading pane can show the thread metadata in the expanded header details.
+Verification: `TestParseRawMessageThreadHeaders`; `go test ./internal/httpapi`; `npm run typecheck`.
 
-### 097. Keep labels and rules excluded
-Status: Non-goal guardrail
-Evidence: Plan excludes labels/tags and rules/filters.
-Expected outcome: Organizing behavior remains folder-based unless product scope changes.
-Verification: Preserved as a non-goal guardrail; no implementation added.
+### 097. Add ManageSieve-backed rules foundation
+Status: Completed
+Evidence: Product decision now includes rule-based blocking and folder classification in phase scope, while labels/tags are not needed now.
+Completed evidence: backend rules routes use optional ManageSieve configuration, authenticate with the current session credential, and write only a delimited `BEGIN JOOMAIL RULES` / `END JOOMAIL RULES` block instead of directly editing Sieve files or mail-server configuration.
+Completed evidence: initial rules support sender email/domain contains or equals, subject contains, and safe folder moves including Spam and Trash. `SettingsPanel` exposes a minimal editor for those supported rules. Labels are not implemented, and destructive discard/block semantics remain deferred for a later explicit decision.
+Verification: `TestRulesRouteUsesManageSieveCredentialAndWritesManagedScript`, `TestRulesRouteReturnsUnavailableWhenManageSieveDisabled`, `TestReplaceJooMailRulesBlockPreservesUserScriptContent`, `TestBuildJooMailRulesBlockGeneratesFolderClassificationSieve`; `go test ./...`; `npm run typecheck`.
 
-### 098. Keep scheduled send and undo send excluded
-Status: Non-goal guardrail
-Evidence: Plan excludes scheduled send and undo send.
-Expected outcome: Compose work stays limited to immediate SMTP send and approved Drafts behavior.
-Verification: Preserved as a non-goal guardrail; no implementation added.
+### 098. Add scheduled send and undo send phase design
+Status: Planned
+Evidence: Product decision now includes scheduled send and undo send in phase scope.
+Expected outcome: Decide whether undo send is browser-local delayed send, backend queued send, or both; decide scheduled-send storage and retry semantics before implementation. Do not add background workers or persistent queues until that design is approved.
+Verification: Planned; no runtime behavior changed.
 
 ### 099. Keep contacts and calendar excluded
 Status: Non-goal guardrail
@@ -636,7 +637,7 @@ Verification: Preserved as a non-goal guardrail; no implementation added.
 ## Notes
 
 - Items marked `Needs approval` must stop before implementation and ask the user.
-- Persistence, database, background sync/indexing, CI/deploy workflow changes, Dovecot/Postfix configuration, new dependencies, and production operational changes are approval-gated by project rules.
+- Persistence, database, background sync/indexing, CI/deploy workflow changes, Dovecot/Postfix configuration, new dependencies, and production operational changes are approval-gated by project rules unless a later product/implementation decision explicitly grants them.
 - The backlog intentionally includes guardrails so future planning does not reintroduce explicitly excluded product features.
 - Visual QA screenshots remain pending until a manual/browser-agent pass records results in `docs/qa-ui-states.md`.
 

@@ -594,6 +594,39 @@ func TestParseRawMessageSplitsAddressListHeaders(t *testing.T) {
 	}
 }
 
+func TestParseRawMessageThreadHeaders(t *testing.T) {
+	raw := strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Jooseho <jooseho@good-night.co.kr>",
+		"Subject: Re: Threaded message",
+		"Date: Thu, 2 Jul 2026 09:14:00 +0900",
+		"Message-ID: <reply@example.com>",
+		"In-Reply-To: <root@example.com>",
+		"References: <root@example.com> <parent@example.com>",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		"Hello",
+	}, "\r\n")
+
+	message, err := parseRawMessage("jooseho@good-night.co.kr", "inbox", "7", []byte(raw))
+
+	if err != nil {
+		t.Fatalf("parse raw message: %v", err)
+	}
+	if message.ThreadID != "root@example.com" {
+		t.Fatalf("threadID = %q, want root@example.com", message.ThreadID)
+	}
+	if message.Headers.MessageID != "reply@example.com" {
+		t.Fatalf("messageID = %q, want reply@example.com", message.Headers.MessageID)
+	}
+	if message.Headers.InReplyTo != "root@example.com" {
+		t.Fatalf("inReplyTo = %q, want root@example.com", message.Headers.InReplyTo)
+	}
+	if got, want := message.Headers.References, []string{"root@example.com", "parent@example.com"}; !slicesEqual(got, want) {
+		t.Fatalf("references = %#v, want %#v", got, want)
+	}
+}
+
 func TestAccountsOrderInboxFirst(t *testing.T) {
 	host, port := startFakeIMAPServer(t, fakeIMAPScript{
 		onLogin:   func(username, password string) string { return "OK LOGIN completed" },

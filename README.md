@@ -20,6 +20,8 @@ The product API is backed by live IMAP/SMTP data. Configure the mail server and 
 - `JOOMAIL_SMTP_TLS`: optional implicit TLS toggle for SMTP. Port `465` also uses implicit TLS.
 - `JOOMAIL_SMTP_STARTTLS`: optional STARTTLS upgrade for non-implicit SMTP connections.
 - `JOOMAIL_SMTP_USER_FORMAT`: optional SMTP username mapping. Current send support expects the approved localpart mode.
+- `JOOMAIL_MANAGESIEVE_HOST`, `JOOMAIL_MANAGESIEVE_PORT`: optional ManageSieve endpoint for server-side rules.
+- `JOOMAIL_MANAGESIEVE_TLS`: optional implicit TLS toggle for ManageSieve connections.
 - `JOOMAIL_LOGIN_DOMAIN`: optional domain appended during login flows when applicable.
 - `JOOMAIL_SESSION_SECRET`: required HMAC signing secret for session cookies.
 - `JOOMAIL_CREDENTIAL_KEY`: required local encryption key for stored session credentials.
@@ -44,6 +46,8 @@ Initial API endpoints:
 - `POST /api/messages/{messageID}/move`
 - `POST /api/send`
 - `POST /api/drafts`
+- `GET /api/accounts/{accountID}/rules`
+- `PUT /api/accounts/{accountID}/rules`
 
 `POST /api/send` trims To/Cc/Bcc recipients and rejects missing or malformed
 addresses with `400` before opening an SMTP connection. Bcc recipients are used
@@ -73,6 +77,16 @@ Message move uses IMAP `UID MOVE` when the server supports it. If `MOVE` is not
 accepted, JooMail falls back to `UID COPY`, `UID STORE +FLAGS.SILENT
 (\Deleted)`, and `EXPUNGE` on the selected source mailbox.
 
+Rules are managed through ManageSieve when `JOOMAIL_MANAGESIEVE_HOST` and
+`JOOMAIL_MANAGESIEVE_PORT` are configured. If ManageSieve is not configured, the
+rules API returns `503 rules are unavailable` and does not touch Sieve files or
+mail-server configuration. Rules authenticate with the current session's stored
+mail credential and write only a delimited `BEGIN JOOMAIL RULES` / `END JOOMAIL
+RULES` block in a JooMail-managed Sieve script. JooMail currently supports
+sender email/domain `contains` or `equals`, subject `contains`, and safe folder
+moves including Spam and Trash. Labels and destructive discard/block rules are
+not implemented in this phase.
+
 ## Deploy
 
 Deployment uses the self-hosted GitHub Actions runner and follows the PillowCare
@@ -81,8 +95,8 @@ server pattern.
 Deploy manually from GitHub Actions, or push a release tag:
 
 ```sh
-git tag joomail-v0.1.12
-git push origin joomail-v0.1.12
+git tag joomail-v0.1.13
+git push origin joomail-v0.1.13
 ```
 
 The workflow builds the Vite frontend, builds the Go backend, installs artifacts

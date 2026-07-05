@@ -33,6 +33,7 @@ const (
 var remoteImageSrcPattern = regexp.MustCompile(`(?i)(<img\b[^>]*?)\s+src\s*=\s*("https?://[^"]*"|'https?://[^']*'|https?://[^\s>]+)`)
 var cidImageSrcPattern = regexp.MustCompile(`(?i)(<img\b[^>]*?)\s+src\s*=\s*("cid:[^"]+"|'cid:[^']+'|cid:[^\s>]+)`)
 var dataImageSrcPattern = regexp.MustCompile(`(?i)^data:image/(gif|jpeg|png|webp);base64,[a-z0-9+/]+=*$`)
+var messageIDPattern = regexp.MustCompile(`<([^>]+)>`)
 
 type inlineImage struct {
 	mediaType string
@@ -715,7 +716,8 @@ func literalSize(line string) (int, bool) {
 	if start == -1 || end == -1 || end < start {
 		return 0, false
 	}
-	size, err := strconv.Atoi(line[start+1 : end])
+	rawSize := strings.TrimSuffix(line[start+1:end], "+")
+	size, err := strconv.Atoi(rawSize)
 	return size, err == nil
 }
 
@@ -1068,6 +1070,10 @@ func parseRawMessage(accountID string, mailboxID string, uid string, raw []byte)
 	subject := decodeHeader(header.Get("Subject"))
 	fromName, fromEmail := parseAddress(header.Get("From"))
 	date := header.Get("Date")
+	messageIDHeader := normalizeMessageID(header.Get("Message-ID"))
+	inReplyTo := normalizeMessageID(header.Get("In-Reply-To"))
+	references := parseMessageIDList(header.Get("References"))
+	threadID := threadIDFromHeaders(messageIDHeader, inReplyTo, references)
 	body, htmlBody, attachments, remoteImagesBlocked := parseMessageBody(header, msg.Body)
 	snippet := ""
 	if len(body) > 0 {
@@ -1082,6 +1088,7 @@ func parseRawMessage(accountID string, mailboxID string, uid string, raw []byte)
 			ID:            messageID(mailboxID, uid),
 			AccountID:     accountID,
 			MailboxID:     mailboxID,
+			ThreadID:      threadID,
 			Sender:        fromName,
 			SenderEmail:   fromEmail,
 			Initials:      firstInitial(fromName),
@@ -1093,11 +1100,14 @@ func parseRawMessage(accountID string, mailboxID string, uid string, raw []byte)
 			HasAttachment: len(attachments) > 0,
 		},
 		Headers: MessageHead{
-			From:    header.Get("From"),
-			To:      parseAddressListHeaders(header["To"]),
-			Cc:      parseAddressListHeaders(header["Cc"]),
-			Date:    date,
-			Subject: subject,
+			From:       header.Get("From"),
+			To:         parseAddressListHeaders(header["To"]),
+			Cc:         parseAddressListHeaders(header["Cc"]),
+			Date:       date,
+			Subject:    subject,
+			MessageID:  messageIDHeader,
+			InReplyTo:  inReplyTo,
+			References: references,
 		},
 		RemoteImagesBlocked: remoteImagesBlocked,
 		TextBody:            body,
@@ -1521,6 +1531,44 @@ func parseAddressListHeaders(values []string) []string {
 		result = append(result, name+" <"+address.Address+">")
 	}
 	return result
+}
+
+func parseMessageIDList(value string) []string {
+	matches := messageIDPattern.FindAllStringSubmatch(value, -1)
+	if len(matches) > 0 {
+		ids := make([]string, 0, len(matches))
+		for _, match := range matches {
+			if id := normalizeMessageID(match[1]); id != "" {
+				ids = append(ids, id)
+			}
+		}
+		return ids
+	}
+	fields := strings.Fields(value)
+	ids := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if id := normalizeMessageID(field); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func normalizeMessageID(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.Trim(value, "<>")
+	value = strings.TrimSpace(value)
+	return strings.ToLower(value)
+}
+
+func threadIDFromHeaders(messageID string, inReplyTo string, references []string) string {
+	if len(references) > 0 {
+		return references[0]
+	}
+	if inReplyTo != "" {
+		return inReplyTo
+	}
+	return messageID
 }
 
 func decodeHeader(value string) string {

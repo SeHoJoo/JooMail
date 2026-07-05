@@ -30,6 +30,7 @@ type MessageSummary struct {
 	ID            string `json:"id"`
 	AccountID     string `json:"accountId"`
 	MailboxID     string `json:"mailboxId"`
+	ThreadID      string `json:"threadId,omitempty"`
 	Sender        string `json:"sender"`
 	SenderEmail   string `json:"senderEmail"`
 	Initials      string `json:"initials"`
@@ -52,9 +53,29 @@ type Message struct {
 }
 
 type MessageHead struct {
-	From    string   `json:"from"`
-	To      []string `json:"to"`
-	Cc      []string `json:"cc,omitempty"`
-	Date    string   `json:"date"`
-	Subject string   `json:"subject"`
+	From       string   `json:"from"`
+	To         []string `json:"to"`
+	Cc         []string `json:"cc,omitempty"`
+	Date       string   `json:"date"`
+	Subject    string   `json:"subject"`
+	MessageID  string   `json:"messageId,omitempty"`
+	InReplyTo  string   `json:"inReplyTo,omitempty"`
+	References []string `json:"references,omitempty"`
+}
+
+type MailRule struct {
+	Name      string        `json:"name,omitempty"`
+	Condition RuleCondition `json:"condition"`
+	Action    RuleAction    `json:"action"`
+}
+
+type RuleCondition struct {
+	Field string `json:"field"`
+	Match string `json:"match"`
+	Value string `json:"value"`
+}
+
+type RuleAction struct {
+	Type      string `json:"type"`
+	MailboxID string `json:"mailboxId,omitempty"`
 }

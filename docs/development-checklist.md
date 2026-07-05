@@ -2,7 +2,7 @@
 
 This checklist tracks the gap between `docs/webmail-ui-plan.md` and the current source tree.
 
-Last audited: 2026-07-03  
+Last audited: 2026-07-04
 Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-states.md`, `internal/httpapi/*`, `src/*`
 
 ## Maintenance Rules
@@ -217,6 +217,25 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Evidence: `ReadingPane` detects parsed plain-text quote starts (`>` and `On ... wrote:`), hides quoted paragraphs by default, and expands only when quoted content exists.
   Verification: `npm run typecheck`.
 
+- [x] Add backend-owned conversation threading metadata.
+  Evidence: `parseRawMessage` now normalizes `Message-ID`, `In-Reply-To`, and `References`, derives `threadId`, and includes the metadata in parsed message JSON without frontend MIME parsing.
+  Verification: `TestParseRawMessageThreadHeaders`; `go test ./internal/httpapi`; `npm run typecheck`.
+
+- [x] Add ManageSieve-backed rules foundation without labels.
+  Evidence: `Config` supports optional `JOOMAIL_MANAGESIEVE_HOST`, `JOOMAIL_MANAGESIEVE_PORT`, and `JOOMAIL_MANAGESIEVE_TLS`; `GET`/`PUT /api/accounts/{accountID}/rules` authenticate with the current session credential, use ManageSieve instead of direct Sieve file edits, and replace only the delimited `BEGIN JOOMAIL RULES` / `END JOOMAIL RULES` block.
+  Evidence: the rule model supports sender email/domain contains or equals, subject contains, and safe folder moves including Spam and Trash.
+  Deferred: labels/tags are explicitly outside this implementation; destructive discard/block rules need a later explicit product decision.
+  Verification: `TestRulesRouteUsesManageSieveCredentialAndWritesManagedScript`, `TestRulesRouteReturnsUnavailableWhenManageSieveDisabled`, `TestReplaceJooMailRulesBlockPreservesUserScriptContent`, `TestBuildJooMailRulesBlockGeneratesFolderClassificationSieve`; `go test ./...`.
+
+- [x] Add rules UI for the ManageSieve-backed rules API.
+  Evidence: `SettingsPanel` includes a compact rules editor for the current account, loads/saves through `GET`/`PUT /api/accounts/{accountID}/rules`, and only exposes supported sender/subject folder-move actions.
+  Evidence: the UI shows ManageSieve-unavailable and unmanaged-script conflict states without adding labels, discard/block, persistence, or frontend MIME parsing.
+  Verification: `npm run typecheck`; `go test ./...`.
+
+- [ ] Design scheduled send and undo send now that they are in phase scope.
+  Evidence: `docs/webmail-ui-plan.md` and `docs/future-work-100.md` no longer keep scheduled send/undo send as non-goals.
+  Required decision: choose browser-local delayed send vs backend queued send for undo, and define scheduled-send persistence/retry semantics before implementation.
+
 ## QA And Documentation Gaps
 
 - [x] Run and record visual QA screenshots for all documented QA routes.
@@ -270,5 +289,4 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
 These are planned exclusions, not missing work:
 
 - Do not implement unified inbox unless the product plan changes.
-- Do not implement conversation threading unless the product plan changes.
-- Do not implement labels/tags, rules, scheduled send, undo send, snooze, contacts, calendar integration, account-wide unified search, list sorting options, comfort-density mode, mobile swipe gestures, advanced rich-text formatting, multiple compose windows, or dark-mode toggle UI without a separate product decision.
+- Do not implement labels/tags, destructive discard/block rules, snooze, contacts, calendar integration, account-wide unified search, list sorting options, comfort-density mode, mobile swipe gestures, advanced rich-text formatting, multiple compose windows, or dark-mode toggle UI without a separate product decision.

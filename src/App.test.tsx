@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -12,11 +12,16 @@ const account: Account = {
   initials: "U",
   unread: 0,
   storage: "1 GB",
-  mailboxes: [{ id: "inbox", label: "Inbox", kind: "inbox", unread: 0 }],
+  mailboxes: [
+    { id: "inbox", label: "Inbox", kind: "inbox", unread: 0 },
+    { id: "sent", label: "Sent", kind: "sent", unread: 0 },
+  ],
 };
 
 const staleMessage = message("stale", "Stale subject");
 const freshMessage = message("fresh", "Fresh subject");
+const inboxMessage = message("inbox-1", "Inbox subject");
+const sentMessage = { ...message("sent-1", "Sent subject"), mailboxId: "sent" };
 
 describe("AppShell search", () => {
   beforeEach(() => {
@@ -24,6 +29,7 @@ describe("AppShell search", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -62,6 +68,70 @@ describe("AppShell search", () => {
 
     await waitFor(() => expect(document.querySelector('[data-message-id="stale"]')).not.toBeInTheDocument());
     expect(document.querySelector('[data-message-id="fresh"]')).toBeInTheDocument();
+  });
+
+  it("loads the first message detail when opening a mailbox route without a message id", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/messages/inbox-1") {
+          return jsonResponse({ message: { ...inboxMessage, textBody: ["Loaded inbox body"] } });
+        }
+        if (url.startsWith("/api/accounts/acct1/mailboxes/inbox/messages")) {
+          return jsonResponse({ messages: [inboxMessage] });
+        }
+        return jsonResponse({ messages: [] });
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={["/mail/acct1/inbox"]}>
+        <Routes>
+          <Route path="/mail/:accountId/:mailboxId" element={<AppShell initialAccounts={[account]} />} />
+          <Route path="/mail/:accountId/:mailboxId/:messageId" element={<AppShell initialAccounts={[account]} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText("Loaded inbox body")).toBeInTheDocument());
+  });
+
+  it("keeps a single sidebar mailbox click on the selected mailbox", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/messages/sent-1") {
+          return jsonResponse({ message: { ...sentMessage, textBody: ["Loaded sent body"] } });
+        }
+        if (url === "/api/messages/inbox-1") {
+          return jsonResponse({ message: { ...inboxMessage, textBody: ["Loaded inbox body"] } });
+        }
+        if (url.startsWith("/api/accounts/acct1/mailboxes/sent/messages")) {
+          return jsonResponse({ messages: [sentMessage] });
+        }
+        if (url.startsWith("/api/accounts/acct1/mailboxes/inbox/messages")) {
+          return jsonResponse({ messages: [inboxMessage] });
+        }
+        return jsonResponse({ messages: [] });
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={["/mail/acct1/inbox"]}>
+        <Routes>
+          <Route path="/mail/:accountId/:mailboxId" element={<AppShell initialAccounts={[account]} />} />
+          <Route path="/mail/:accountId/:mailboxId/:messageId" element={<AppShell initialAccounts={[account]} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText("Loaded inbox body")).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole("button", { name: "Sent" })[1]);
+
+    await waitFor(() => expect(screen.getByText("Loaded sent body")).toBeInTheDocument());
+    expect(screen.queryByText("Loaded inbox body")).not.toBeInTheDocument();
   });
 });
 

@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { accounts as mockAccounts, messages as mockMessages } from "./data";
-import type { Account, ComposeDraft, ComposeMode, Mailbox, Message, MockMode, SearchScope } from "./types";
+import type { Account, ComposeDraft, ComposeMode, MailRule, Mailbox, Message, MockMode, SearchScope } from "./types";
 import { ComposePanel } from "./components/ComposePanel";
 import { MessageList } from "./components/MessageList";
 import { MobileInbox } from "./components/MobileInbox";
@@ -128,6 +128,11 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const composeDirtyRef = useRef(false);
   const initialQaAppliedRef = useRef(false);
+  const lastRouteRef = useRef({
+    accountId: routeParams.accountId ?? "",
+    mailboxId: routeParams.mailboxId ?? "inbox",
+    messageId: routeParams.messageId ?? "",
+  });
 
   const displayAccounts = useMemo(() => accounts.map((account) => withDisplayName(account, accountNames[account.email])), [accounts, accountNames]);
   const selectedAccount = displayAccounts.find((account) => account.id === accountId) ?? displayAccounts[0];
@@ -172,31 +177,27 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   useEffect(() => {
     if (!useApi) return;
     if (!routeParams.accountId || !accounts.some((account) => account.id === routeParams.accountId)) return;
-    if (routeParams.accountId !== accountId) {
-      setAccountId(routeParams.accountId);
-      setMailboxId(routeParams.mailboxId ?? "inbox");
-      setSelectedMessageId(routeParams.messageId ?? "");
-      setSelectedMessageDetail(undefined);
+
+    const nextAccountId = routeParams.accountId;
+    const nextMailboxId = routeParams.mailboxId ?? "inbox";
+    const nextMessageId = routeParams.messageId ?? "";
+    const previousRoute = lastRouteRef.current;
+    const mailboxChanged = previousRoute.accountId !== nextAccountId || previousRoute.mailboxId !== nextMailboxId;
+    const messageChanged = previousRoute.messageId !== nextMessageId;
+    if (!mailboxChanged && !messageChanged) return;
+    lastRouteRef.current = { accountId: nextAccountId, mailboxId: nextMailboxId, messageId: nextMessageId };
+
+    setAccountId((current) => (current === nextAccountId ? current : nextAccountId));
+    setMailboxId((current) => (current === nextMailboxId ? current : nextMailboxId));
+    setSelectedMessageId((current) => (current === nextMessageId ? current : nextMessageId));
+    setSelectedMessageDetail((current) => (current && current.id === nextMessageId && !mailboxChanged ? current : undefined));
+    if (mailboxChanged) {
       setSearchInput("");
       setSearch("");
       setCheckedIds(new Set());
       setLastCheckedId("");
-      return;
     }
-    if (routeParams.mailboxId && routeParams.mailboxId !== mailboxId) {
-      setMailboxId(routeParams.mailboxId);
-      setSelectedMessageId(routeParams.messageId ?? "");
-      setSelectedMessageDetail(undefined);
-      setSearchInput("");
-      setSearch("");
-      setCheckedIds(new Set());
-      setLastCheckedId("");
-      return;
-    }
-    if ((routeParams.messageId ?? "") !== selectedMessageId) {
-      setSelectedMessageId(routeParams.messageId ?? "");
-    }
-  }, [accountId, accounts, mailboxId, routeParams.accountId, routeParams.mailboxId, routeParams.messageId, selectedMessageId, useApi]);
+  }, [accounts, routeParams.accountId, routeParams.mailboxId, routeParams.messageId, useApi]);
 
   useEffect(() => {
     if (!useApi || !accountId || !mailboxId) return;
@@ -669,6 +670,44 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     }
   }
 
+  const loadRules = useCallback(
+    async (targetAccountId: string) => {
+      try {
+        const body = await apiJSON<{ rules: MailRule[] }>(`/api/accounts/${encodeURIComponent(targetAccountId)}/rules`);
+        return body.rules;
+      } catch (error) {
+        if (isUnauthorized(error)) onSessionExpired?.();
+        if (error instanceof ApiError && error.status === 503) {
+          throw new Error("rules unavailable");
+        }
+        throw error;
+      }
+    },
+    [onSessionExpired],
+  );
+
+  const saveRules = useCallback(
+    async (targetAccountId: string, rules: MailRule[]) => {
+      try {
+        const body = await apiJSON<{ rules: MailRule[] }>(`/api/accounts/${encodeURIComponent(targetAccountId)}/rules`, {
+          method: "PUT",
+          body: JSON.stringify({ rules }),
+        });
+        return body.rules;
+      } catch (error) {
+        if (isUnauthorized(error)) onSessionExpired?.();
+        if (error instanceof ApiError && error.status === 503) {
+          throw new Error("rules unavailable");
+        }
+        if (error instanceof ApiError && error.status === 409) {
+          throw new Error("rules conflict");
+        }
+        throw error;
+      }
+    },
+    [onSessionExpired],
+  );
+
   function updateAccountName(email: string, value: string) {
     setAccountNames((current) => {
       const next = { ...current };
@@ -1011,6 +1050,9 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
           onDisplayNameChange={(value) => updateAccountName(selectedAccount.email, value)}
           remoteImagesEnabled={showRemoteImagesByDefault}
           onRemoteImagesChange={setShowRemoteImagesByDefault}
+          mailboxes={flatMailboxes}
+          onLoadRules={useApi ? () => loadRules(selectedAccount.id) : undefined}
+          onSaveRules={useApi ? (rules) => saveRules(selectedAccount.id, rules) : undefined}
           onLogout={useApi ? logout : undefined}
           onClose={() => setSettingsOpen(false)}
         />

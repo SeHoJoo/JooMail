@@ -40,12 +40,16 @@ export type MessageHeaders = {
   cc?: string[];
   date?: string;
   subject?: string;
+  messageId?: string;
+  inReplyTo?: string;
+  references?: string[];
 };
 
 export type Message = {
   id: string;
   accountId: string;
   mailboxId: string;
+  threadId?: string;
   sender: string;
   senderEmail: string;
   initials: string;
@@ -69,6 +73,25 @@ export type Message = {
 export type ComposeMode = "compose" | "reply" | "replyAll" | "forward";
 
 export type SearchScope = "mailbox" | "account";
+
+export type RuleConditionField = "senderEmail" | "senderDomain" | "subject";
+
+export type RuleMatch = "contains" | "equals";
+
+export type RuleActionType = "move" | "moveSpam" | "moveTrash";
+
+export type MailRule = {
+  name?: string;
+  condition: {
+    field: RuleConditionField;
+    match: RuleMatch;
+    value: string;
+  };
+  action: {
+    type: RuleActionType;
+    mailboxId?: string;
+  };
+};
 
 export type ComposeDraft = {
   fromAccountId: string;

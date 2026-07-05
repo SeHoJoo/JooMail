@@ -85,6 +85,8 @@ export function ReadingPane({ message, mode, mailboxes, showRemoteImagesByDefaul
                 {message.headers?.cc?.length ? <div>참조: {formatHeaderRecipients(message.headers.cc)}</div> : null}
                 <div>보낸사람: {message.sender} &lt;{message.senderEmail}&gt;</div>
                 <div>날짜: {message.fullDate}</div>
+                {message.threadId ? <div>대화 ID: {message.threadId}</div> : null}
+                {message.headers?.inReplyTo ? <div>답장 대상: {message.headers.inReplyTo}</div> : null}
               </div>
             ) : null}
           </div>
