@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { Mailbox, Message, MockMode } from "../types";
 import { EmptyState, ErrorState, LoadingState } from "./StateViews";
 import { Icon } from "./Icon";
-import { attachmentURL, htmlContentClassName, renderTextWithLinks } from "./mailRendering";
+import { attachmentURL, MailHTMLBody, renderTextWithLinks } from "./mailRendering";
 
 type ReadingPaneProps = {
   message?: Message;
@@ -166,7 +166,7 @@ export function ReadingPane({ message, mode, mailboxes, showRemoteImagesByDefaul
           </div>
         ) : null}
         {message.htmlBody ? (
-          <article className={`max-w-[820px] text-sm leading-[1.5] ${htmlContentClassName}`} dangerouslySetInnerHTML={{ __html: htmlBody }} />
+          <MailHTMLBody html={htmlBody} className="max-w-[820px]" />
         ) : (
           <article className="max-w-[750px] whitespace-pre-line text-sm leading-[1.5] text-text">
             {bodySections.visible.slice(0, 3).map((paragraph) => (

@@ -1,14 +1,59 @@
-import type React from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import type { Attachment, Message } from "../types";
 import { Icon } from "./Icon";
 
 const URL_PATTERN = /https?:\/\/[^\s<>"']+/gi;
 
-export const htmlContentClassName =
-  "overflow-x-auto text-text [&_a]:text-accent [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-line [&_blockquote]:pl-3 [&_blockquote]:text-muted [&_font]:font-inherit [&_h1]:mb-4 [&_h1]:text-xl [&_h1]:font-bold [&_h2]:mb-3 [&_h2]:text-lg [&_h2]:font-bold [&_h3]:mb-3 [&_h3]:text-base [&_h3]:font-bold [&_img:not([src])]:hidden [&_img]:h-auto [&_img]:max-w-full [&_li]:mb-1 [&_ol]:mb-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-5 [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_pre]:rounded [&_pre]:bg-[#f7f8f9] [&_pre]:p-3 [&_table]:mb-5 [&_table]:max-w-full [&_table]:border-collapse [&_td]:border-line [&_td]:align-top [&_th]:border-line [&_th]:align-top [&_ul]:mb-5 [&_ul]:list-disc [&_ul]:pl-5";
+export function MailHTMLBody({ html, className = "" }: { html: string; className?: string }) {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [height, setHeight] = useState(120);
+  const srcDoc = useMemo(() => mailHTMLSrcDoc(html), [html]);
+
+  function resizeFrame() {
+    const doc = iframeRef.current?.contentDocument;
+    if (!doc) return;
+    const nextHeight = Math.max(80, doc.documentElement.scrollHeight, doc.body?.scrollHeight ?? 0);
+    setHeight(nextHeight);
+  }
+
+  function handleLoad() {
+    resizeFrame();
+    const images = iframeRef.current?.contentDocument?.images;
+    if (images) {
+      Array.from(images).forEach((image) => image.addEventListener("load", resizeFrame, { once: true }));
+    }
+    window.setTimeout(resizeFrame, 50);
+    window.setTimeout(resizeFrame, 300);
+  }
+
+  return (
+    <iframe
+      ref={iframeRef}
+      className={`w-full border-0 bg-transparent ${className}`.trim()}
+      srcDoc={srcDoc}
+      sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin"
+      title="메일 HTML 본문"
+      style={{ height }}
+      onLoad={handleLoad}
+    />
+  );
+}
+
+export function mailHTMLSrcDoc(html: string) {
+  return `<!doctype html><html><head><base target="_blank"><style>${mailHTMLFrameCSS}</style></head><body>${html}</body></html>`;
+}
+
+const mailHTMLFrameCSS = `
+html,body{margin:0;padding:0;background:transparent;color:#17191c;}
+body{overflow-wrap:anywhere;}
+img{max-width:100%;height:auto;}
+img:not([src]){display:none;}
+table{max-width:100%;}
+pre{white-space:pre-wrap;overflow-x:auto;}
+`;
 
 export function renderTextWithLinks(text: string) {
-  const parts: React.ReactNode[] = [];
+  const parts: ReactNode[] = [];
   let cursor = 0;
   for (const match of text.matchAll(URL_PATTERN)) {
     const index = match.index ?? 0;

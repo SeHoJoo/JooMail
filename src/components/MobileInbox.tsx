@@ -4,7 +4,7 @@ import type { Account, Mailbox, Message, MockMode, SearchScope } from "../types"
 import { Icon } from "./Icon";
 import { highlight } from "./MessageRow";
 import { EmptyState, ErrorState, LoadingState } from "./StateViews";
-import { attachmentURL, htmlContentClassName, renderTextWithLinks } from "./mailRendering";
+import { attachmentURL, MailHTMLBody, renderTextWithLinks } from "./mailRendering";
 
 const ACCOUNT_SEARCH_RESULT_CAP = 50;
 const MOBILE_ROW_HEIGHT = 94;
@@ -421,7 +421,7 @@ function MobileReadingPane({ message, showRemoteImagesByDefault, onBack, onReply
           </div>
         ) : null}
         {message.htmlBody ? (
-          <div className={`mt-6 text-[14px] leading-6 ${htmlContentClassName}`} dangerouslySetInnerHTML={{ __html: htmlBody }} />
+          <MailHTMLBody html={htmlBody} className="mt-6" />
         ) : (
           <div className="mt-6 space-y-4 text-[14px] leading-6 text-text">
             {message.body.length ? message.body.map((paragraph, index) => <p key={`${index}-${paragraph}`}>{renderTextWithLinks(paragraph)}</p>) : <p className="text-muted">본문을 불러오는 중입니다.</p>}

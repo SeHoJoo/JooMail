@@ -33,7 +33,7 @@ explicit approval in the current conversation.
 ## Release
 
 - Bump version metadata only when the release scope requires it.
-- Use an approved release tag such as `joomail-v0.1.13`.
+- Use an approved release tag such as `joomail-v0.1.14`.
 - Push the release tag only after explicit approval.
 - Watch the GitHub Actions deploy run only after an approved deploy trigger.
 

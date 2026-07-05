@@ -95,8 +95,8 @@ server pattern.
 Deploy manually from GitHub Actions, or push a release tag:
 
 ```sh
-git tag joomail-v0.1.13
-git push origin joomail-v0.1.13
+git tag joomail-v0.1.14
+git push origin joomail-v0.1.14
 ```
 
 The workflow builds the Vite frontend, builds the Go backend, installs artifacts

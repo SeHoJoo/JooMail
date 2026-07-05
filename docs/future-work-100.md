@@ -13,7 +13,7 @@ Audit basis: `AGENTS.md`, `.agents/skills/joomail-orchestrator/SKILL.md`, `READM
 
 ## Summary
 
-The deployed `joomail-v0.1.13` baseline has live IMAP/SMTP product flow, backend-owned MIME parsing, search scope, unread counts, compose send, conversation threading metadata, and ManageSieve-backed rules with a minimal settings UI. The highest-value remaining work is scheduled-send/undo-send design, live-server smoke coverage, and continued release/documentation hygiene. Several items below require approval because they touch dependencies, persistence, CI/deploy, background sync, or server configuration.
+The deployed `joomail-v0.1.14` baseline has live IMAP/SMTP product flow, backend-owned MIME parsing, isolated sanitized HTML rendering, search scope, unread counts, compose send, conversation threading metadata, and ManageSieve-backed rules with a minimal settings UI. The highest-value remaining work is scheduled-send/undo-send design, live-server smoke coverage, and continued release/documentation hygiene. Several items below require approval because they touch dependencies, persistence, CI/deploy, background sync, or server configuration.
 
 ## 100-Item Backlog
 
