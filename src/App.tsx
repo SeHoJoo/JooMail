@@ -236,7 +236,6 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         if (cancelled) return;
         const nextMessages = body.messages.map(summaryToMessage);
         setApiMessages(nextMessages);
-        setSelectedMessageId((current) => (current && nextMessages.some((message) => message.id === current) ? current : ""));
         setMode("normal");
       })
       .catch((error) => {
@@ -265,13 +264,13 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         if (!cancelled) {
           const message = normalizeMessage(body.message);
           setSelectedMessageDetail(message);
+          updateMessageUnread(message.id, false);
           if (message.unread) {
-            updateMessageUnread(message.id, false);
             void apiJSON(`/api/messages/${encodeURIComponent(message.id)}/seen`, {
               method: "PATCH",
               body: JSON.stringify({ seen: true }),
             }).catch((error) => {
-              updateMessageUnread(message.id, true);
+              if (!cancelled) updateMessageUnread(message.id, true);
               if (isUnauthorized(error)) onSessionExpired?.();
             });
           }

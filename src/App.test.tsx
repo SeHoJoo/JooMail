@@ -22,6 +22,7 @@ const staleMessage = message("stale", "Stale subject");
 const freshMessage = message("fresh", "Fresh subject");
 const inboxMessage = message("inbox-1", "Inbox subject");
 const unreadInboxMessage = { ...inboxMessage, unread: true };
+const secondInboxMessage = message("inbox-2", "Second subject");
 const sentMessage = { ...message("sent-1", "Sent subject"), mailboxId: "sent" };
 const sendWarning = "전송은 완료됐지만 보낸편지함에 저장하지 못했습니다";
 
@@ -107,26 +108,28 @@ describe("AppShell live mail behavior", () => {
     expect(requestsTo(fetchMock, "/api/messages/inbox-1")).toHaveLength(0);
   });
 
-  it("clears a stale selected id without selecting the first returned message", async () => {
-    const staleDetail = deferred<Response>();
+  it("preserves an explicit direct-route message outside the latest summaries", async () => {
+    const summaries = deferred<Response>();
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith("/api/accounts/acct1/mailboxes/inbox/messages")) {
-        return jsonResponse({ messages: [freshMessage] });
+        return summaries.promise;
       }
-      if (url === "/api/messages/stale") return staleDetail.promise;
-      if (url === "/api/messages/fresh") {
-        return jsonResponse({ message: { ...freshMessage, textBody: ["Unexpected fresh body"] } });
+      if (url === "/api/messages/inbox-1") {
+        return jsonResponse({ message: { ...unreadInboxMessage, textBody: ["Direct route body"] } });
       }
+      if (url === "/api/messages/inbox-1/seen") return jsonResponse({});
       return jsonResponse({});
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    renderApp("/mail/acct1/inbox/stale");
+    renderApp("/mail/acct1/inbox/inbox-1");
 
+    await waitFor(() => expect(requestsTo(fetchMock, "/api/messages/inbox-1/seen")).toHaveLength(1));
+    summaries.resolve(response({ messages: [freshMessage] }));
     await waitFor(() => expect(messageRow("fresh")).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText("메일을 선택하세요")).toBeInTheDocument());
-    expect(requestsTo(fetchMock, "/api/messages/fresh")).toHaveLength(0);
+    expect(screen.getByText("Direct route body")).toBeInTheDocument();
+    expect(requestsTo(fetchMock, "/api/messages/inbox-1/seen")[0]?.[1]?.method).toBe("PATCH");
   });
 
   it("marks an unread row seen only after its detail opens", async () => {
@@ -153,8 +156,32 @@ describe("AppShell live mail behavior", () => {
 
     await waitFor(() => expect(screen.getByText("Unread body")).toBeInTheDocument());
     await waitFor(() => expect(requestsTo(fetchMock, "/api/messages/inbox-1/seen")).toHaveLength(1));
+    expect(requestsTo(fetchMock, "/api/messages/inbox-1/seen")[0]?.[1]?.method).toBe("PATCH");
     expect(seenRequestBody(fetchMock)).toEqual({ seen: true });
     expect(unreadMarker("inbox-1")).toHaveAttribute("data-show", "false");
+  });
+
+  it("reconciles an unread summary when detail is already read without patching seen", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/accounts/acct1/mailboxes/inbox/messages")) {
+        return jsonResponse({ messages: [unreadInboxMessage] });
+      }
+      if (url === "/api/messages/inbox-1") {
+        return jsonResponse({ message: { ...unreadInboxMessage, unread: false, textBody: ["Already read body"] } });
+      }
+      if (url === "/api/messages/inbox-1/seen") return jsonResponse({});
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    await waitFor(() => expect(messageRow("inbox-1")).toBeInTheDocument());
+    fireEvent.click(messageRow("inbox-1")!);
+
+    await waitFor(() => expect(screen.getByText("Already read body")).toBeInTheDocument());
+    expect(unreadMarker("inbox-1")).toHaveAttribute("data-show", "false");
+    expect(requestsTo(fetchMock, "/api/messages/inbox-1/seen")).toHaveLength(0);
   });
 
   it("restores unread when the seen patch fails and leaves detail open", async () => {
@@ -183,6 +210,48 @@ describe("AppShell live mail behavior", () => {
     await waitFor(() => expect(unreadMarker("inbox-1")).toHaveAttribute("data-show", "true"));
     expect(screen.getByText("Rollback body")).toBeInTheDocument();
     expect(screen.queryByText("메일을 불러오지 못했습니다")).not.toBeInTheDocument();
+  });
+
+  it("ignores an older seen failure after a newer open succeeds", async () => {
+    const firstSeenPatch = deferred<Response>();
+    let detailCount = 0;
+    let seenCount = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/accounts/acct1/mailboxes/inbox/messages")) {
+        return jsonResponse({ messages: [unreadInboxMessage, secondInboxMessage] });
+      }
+      if (url === "/api/messages/inbox-1") {
+        detailCount += 1;
+        return jsonResponse({ message: { ...unreadInboxMessage, textBody: [detailCount === 1 ? "First open body" : "Second open body"] } });
+      }
+      if (url === "/api/messages/inbox-2") {
+        return jsonResponse({ message: { ...secondInboxMessage, textBody: ["Other body"] } });
+      }
+      if (url === "/api/messages/inbox-1/seen") {
+        seenCount += 1;
+        return seenCount === 1 ? firstSeenPatch.promise : jsonResponse({});
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    await waitFor(() => expect(messageRow("inbox-1")).toBeInTheDocument());
+    fireEvent.click(messageRow("inbox-1")!);
+    await waitFor(() => expect(requestsTo(fetchMock, "/api/messages/inbox-1/seen")).toHaveLength(1));
+
+    fireEvent.click(messageRow("inbox-2")!);
+    await waitFor(() => expect(screen.getByText("Other body")).toBeInTheDocument());
+    fireEvent.click(messageRow("inbox-1")!);
+    await waitFor(() => expect(screen.getByText("Second open body")).toBeInTheDocument());
+    await waitFor(() => expect(requestsTo(fetchMock, "/api/messages/inbox-1/seen")).toHaveLength(2));
+    expect(unreadMarker("inbox-1")).toHaveAttribute("data-show", "false");
+
+    firstSeenPatch.resolve(response({}, 500));
+    await wait(0);
+
+    expect(unreadMarker("inbox-1")).toHaveAttribute("data-show", "false");
   });
 
   it("uses the shared detail-then-seen flow for keyboard selection", async () => {

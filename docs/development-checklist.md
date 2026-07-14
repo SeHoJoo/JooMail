@@ -183,12 +183,12 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Evidence: React Router routes `/mail/:accountId/:mailboxId` and `/mail/:accountId/:mailboxId/:messageId` are defined, and `AppShell` synchronizes route params with selected product state.
   Verification: `npm test`; `npm run typecheck`.
 
-- [x] Keep live mailbox-list entry and stale-selection cleanup unselected.
-  Evidence: explicit mailbox-list routes ignore persisted message IDs, list completion never substitutes the first row, and live account/mailbox navigation clears message selection while explicit message routes still open their requested detail.
+- [x] Keep live mailbox-list entry unselected without invalidating explicit detail routes.
+  Evidence: explicit mailbox-list routes ignore persisted message IDs, list completion never substitutes the first row or clears an explicit message merely because it is outside the latest-50 summaries, and live account/mailbox navigation clears message selection while direct message routes remain authoritative.
   Verification: `src/App.test.tsx`; `npm test`; `npm run typecheck`.
 
 - [x] Mark unread messages seen only after detail opens, with optimistic rollback.
-  Evidence: the shared detail-success path sends `PATCH /api/messages/{messageID}/seen` with `{seen:true}` after GET success, clears unread immediately, and restores unread without closing detail when PATCH fails; row, keyboard, mobile, and direct-route opens share this path.
+  Evidence: the shared detail-success path reconciles summary unread from detail, sends `PATCH /api/messages/{messageID}/seen` with `{seen:true}` only when detail remains unread, clears unread immediately, and restores unread without closing detail when the active PATCH fails; cancelled older failures cannot overwrite a newer open. Row, keyboard, mobile, and direct-route opens share this path.
   Verification: `src/App.test.tsx`; `npm test`; `npm run typecheck`.
 
 - [x] Surface a sent-copy storage warning without treating delivery as failed.
