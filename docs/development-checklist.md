@@ -40,8 +40,8 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Evidence: `handleSend` trims To/Cc/Bcc recipients, validates them with the Go standard library, and returns `400` for missing or malformed addresses before opening SMTP; `README.md` documents the policy.
   Verification: `TestSendRejectsInvalidRecipientsBeforeSMTP`; `go test ./internal/httpapi`.
 - [x] Send route failure surfaces are pinned and generic.
-  Evidence: SMTP auth failure, RCPT rejection, DATA failure, and DATA close failure return `502 failed to send message` without leaking upstream server text; a later Sent APPEND failure is a successful delivery response with `sentCopyStored:false` so retry cannot duplicate delivery.
-  Verification: `TestSendSMTPFailuresReturnGenericBadGateway`, `TestSendAppendFailureReturnsSuccessWithMissingSentCopy`; `go test ./internal/httpapi`.
+  Evidence: SMTP auth failure, RCPT rejection, DATA failure, and DATA close failure return `502 failed to send message` without leaking upstream server text. After DATA final acceptance, QUIT is best-effort and Sent APPEND still runs; a later Sent APPEND failure is a successful delivery response with `sentCopyStored:false` so retry cannot duplicate delivery.
+  Verification: `TestSendSMTPFailuresReturnGenericBadGateway`, `TestSendQuitFailureAfterDataAcceptanceStillAppendsSentCopy`, `TestSendAppendFailureReturnsSuccessWithMissingSentCopy`; `go test ./internal/httpapi`.
 - [x] Bcc privacy behavior is pinned.
   Evidence: route-level SMTP test captures To/Cc/Bcc RCPT commands and confirms generated DATA contains no Bcc header.
   Verification: `TestSendBccRecipientsDoNotLeakInMessageHeaders`; `go test ./internal/httpapi`.
@@ -61,7 +61,7 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
 ## Backend Gaps
 
 - [x] Replace list-then-filter search with IMAP server-side search.
-  Evidence: `messageSummaries` now builds `UID SEARCH TEXT ...` criteria before fetching, and no longer filters `q` after fetching summaries.
+  Evidence: `messageSummaries` now builds `UID SEARCH NOT DELETED` or `UID SEARCH NOT DELETED TEXT ...` criteria before fetching, and no longer filters `q` after fetching summaries.
   Verification: `TestMessageSummariesUseServerSideSearchBeforeLimit`; `go test ./...`.
 
 - [x] Add explicit search scope handling for current mailbox vs current account.
@@ -73,19 +73,19 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Verification: `TestAccountScopeSearchSkipsNoselectMailboxes`; `go test ./internal/httpapi`.
 
 - [x] Harden IMAP search query quoting and non-ASCII search behavior.
-  Evidence: `searchCriteria` trims empty queries to `ALL`, quotes spaces/quotes/parentheses with `quoteIMAPString`, and uses `CHARSET UTF-8` for non-ASCII queries.
+  Evidence: `searchCriteria` trims empty queries to `NOT DELETED`, prefixes text queries with `NOT DELETED`, quotes spaces/quotes/parentheses with `quoteIMAPString`, and uses `CHARSET UTF-8` for non-ASCII queries.
   Verification: `TestSearchCriteriaQuotesSpecialCharactersAndNonASCII`; `go test ./...`.
 
 - [x] Add predictable fallback for IMAP servers rejecting `CHARSET UTF-8` search.
-  Evidence: non-ASCII search retries the same `TEXT` query without the charset prefix when the server rejects charset search; `README.md` documents the behavior.
+  Evidence: non-ASCII search retries the same `NOT DELETED TEXT` query without the charset prefix when the server rejects charset search; `README.md` documents the behavior.
   Verification: `TestSearchCriteriaWithoutCharsetOnlyStripsUTF8Prefix`, `TestMessageSummariesRetryNonASCIISearchWithoutCharsetWhenRejected`; `go test ./internal/httpapi`.
 
 - [x] Cover IMAP mailbox quoting for names with quotes and backslashes.
-  Evidence: command-capture tests verify SELECT, STATUS, SEARCH, MOVE, COPY fallback, and APPEND paths handle quoted/backslash mailbox names safely.
+  Evidence: command-capture tests verify SELECT, STATUS, SEARCH, capability-selected COPY fallback, and APPEND paths handle quoted/backslash mailbox names safely. MOVE-capable routing is covered separately by move route tests.
   Verification: `TestIMAPMailboxNamesWithQuotesAndBackslashes`; `go test ./internal/httpapi`.
 
 - [x] Cover nested archive/trash move targets.
-  Evidence: move route tests verify encoded nested target mailbox IDs such as `Work/Archive` and `Work/Trash` are decoded and passed to IMAP MOVE.
+  Evidence: move route tests advertise MOVE capability and verify encoded nested target mailbox IDs such as `Work/Archive` and `Work/Trash` are decoded and passed to `UID MOVE`.
   Verification: `TestMessageMoveRouteMovesToNestedArchiveAndTrashTargets`; `go test ./internal/httpapi`.
 
 - [x] Document and test IMAP MOVE fallback behavior.

@@ -1510,6 +1510,8 @@ func TestMessageMoveRouteLeavesDeferredDeletionWithoutUIDPlus(t *testing.T) {
 }
 
 func TestMessageMoveRouteTreatsUIDExpungeFailureAsSuccess(t *testing.T) {
+	var uidExpungeCalled bool
+	var fullExpungeCalled bool
 	host, port := startFakeIMAPServer(t, fakeIMAPScript{
 		capabilities: []string{"IMAP4rev1", "UIDPLUS"},
 		onLogin:      func(username, password string) string { return "OK LOGIN completed" },
@@ -1517,10 +1519,14 @@ func TestMessageMoveRouteTreatsUIDExpungeFailureAsSuccess(t *testing.T) {
 		onCopy:       func(mailbox string, uid string, target string) string { return "OK COPY completed" },
 		onStore:      func(mailbox string, uid string, operation string, flag string) string { return "OK STORE completed" },
 		onUIDExpunge: func(mailbox string, uid string) string {
+			uidExpungeCalled = true
 			return "NO UID EXPUNGE failed"
 		},
-		onExpunge: func(mailbox string) string { return "NO EXPUNGE failed" },
-		messages:  map[string]map[string]string{"INBOX": {"7": "From: Alice <alice@example.com>\r\nSubject: Move\r\n\r\nBody"}},
+		onExpunge: func(mailbox string) string {
+			fullExpungeCalled = true
+			return "NO EXPUNGE failed"
+		},
+		messages: map[string]map[string]string{"INBOX": {"7": "From: Alice <alice@example.com>\r\nSubject: Move\r\n\r\nBody"}},
 	})
 	server, cookie := loginTestSession(t, testConfig(t, host, port))
 
@@ -1528,6 +1534,12 @@ func TestMessageMoveRouteTreatsUIDExpungeFailureAsSuccess(t *testing.T) {
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d after COPY and STORE; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if !uidExpungeCalled {
+		t.Fatal("UID EXPUNGE was not attempted after COPY and STORE")
+	}
+	if fullExpungeCalled {
+		t.Fatal("full EXPUNGE was called after UID EXPUNGE failure")
 	}
 }
 
@@ -2458,6 +2470,45 @@ func TestSendAppendFailureReturnsSuccessWithMissingSentCopy(t *testing.T) {
 	}
 }
 
+func TestSendQuitFailureAfterDataAcceptanceStillAppendsSentCopy(t *testing.T) {
+	var appendedMessage string
+	imapHost, imapPort := startFakeIMAPServer(t, fakeIMAPScript{
+		mailboxes: []string{"INBOX", "Sent"},
+		onLogin:   func(username, password string) string { return "OK LOGIN completed" },
+		onAppend: func(mailbox string, message string) string {
+			appendedMessage = message
+			return "OK APPEND completed"
+		},
+	})
+	var smtpData string
+	smtpHost, smtpPort := startFakeSMTPServerWithScript(t, fakeSMTPScript{
+		data:         &smtpData,
+		quitResponse: "421 connection closing failed",
+	})
+	config := testConfig(t, imapHost, imapPort)
+	config.SMTPHost = smtpHost
+	config.SMTPPort = smtpPort
+	config.SMTPUserFormat = "localpart"
+	server, cookie := loginTestSessionWithPassword(t, config, "mail-password")
+
+	recorder := requestWithServer(t, server, http.MethodPost, "/api/send", strings.NewReader(`{"to":["alice@example.com"],"subject":"Accepted","textBody":"Plain message"}`), cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d after DATA acceptance; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var response struct {
+		Status         string `json:"status"`
+		SentCopyStored bool   `json:"sentCopyStored"`
+	}
+	decode(t, recorder, &response)
+	if response.Status != "sent" || !response.SentCopyStored {
+		t.Fatalf("send response = %#v, want accepted send with stored copy", response)
+	}
+	if normalizeMailLineEndings(appendedMessage) != normalizeMailLineEndings(smtpData) {
+		t.Fatalf("appended message = %q, want accepted SMTP data %q", appendedMessage, smtpData)
+	}
+}
+
 func TestSendRejectsOversizedMultipartRequest(t *testing.T) {
 	imapHost, imapPort := startFakeIMAPServer(t, fakeIMAPScript{
 		onLogin: func(username, password string) string { return "OK LOGIN completed" },
@@ -3055,6 +3106,7 @@ type fakeSMTPScript struct {
 	rcptResponse      string
 	dataResponse      string
 	dataCloseResponse string
+	quitResponse      string
 }
 
 func startFakeSMTPServerWithScript(t *testing.T, script fakeSMTPScript) (string, string) {
@@ -3182,7 +3234,11 @@ func serveFakeSMTPConn(conn net.Conn, script fakeSMTPScript) {
 			}
 			_, _ = conn.Write([]byte(response + "\r\n"))
 		case line == "QUIT":
-			_, _ = conn.Write([]byte("221 bye\r\n"))
+			response := script.quitResponse
+			if response == "" {
+				response = "221 bye"
+			}
+			_, _ = conn.Write([]byte(response + "\r\n"))
 			return
 		default:
 			_, _ = conn.Write([]byte("250 ok\r\n"))

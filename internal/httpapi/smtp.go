@@ -242,9 +242,7 @@ func (s *Server) sendMail(credential storedCredential, request sendRequest) (boo
 	if err := writer.Close(); err != nil {
 		return false, err
 	}
-	if err := client.Quit(); err != nil {
-		return false, err
-	}
+	_ = client.Quit()
 	if err := s.appendSentMessage(credential, message); err != nil {
 		return false, nil
 	}
