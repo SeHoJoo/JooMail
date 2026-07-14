@@ -175,17 +175,29 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Verification: `npm test`; `npm run typecheck`; `npm run qa:visual`.
 
 - [x] Add account/mailbox state restoration policy.
-  Evidence: `App` persists active account, per-account mailbox, selected message, and search scope in `localStorage` under `joomail:mail-state`.
+  Evidence: `App` persists active account, per-account mailbox, selected-message route state, and search scope in `localStorage` under `joomail:mail-state`; explicit live mailbox-list routes and account/mailbox navigation intentionally start with no selected message.
   Evidence: desktop and mobile list scroll positions persist per account, mailbox, search scope, and search text key.
-  Verification: `npm run typecheck`; `npm run qa:visual`.
+  Verification: `src/App.test.tsx`; `npm test`; `npm run typecheck`.
 
 - [x] Add browser route integration for account, mailbox, and selected message.
   Evidence: React Router routes `/mail/:accountId/:mailboxId` and `/mail/:accountId/:mailboxId/:messageId` are defined, and `AppShell` synchronizes route params with selected product state.
   Verification: `npm test`; `npm run typecheck`.
 
-- [x] Document selected-message restoration QA coverage.
-  Evidence: `docs/qa-ui-states.md` includes a manual checklist item for selected account, mailbox, message, and search scope restoration from `joomail:mail-state`.
-  Verification: docs diff; no runtime behavior changed.
+- [x] Keep live mailbox-list entry and stale-selection cleanup unselected.
+  Evidence: explicit mailbox-list routes ignore persisted message IDs, list completion never substitutes the first row, and live account/mailbox navigation clears message selection while explicit message routes still open their requested detail.
+  Verification: `src/App.test.tsx`; `npm test`; `npm run typecheck`.
+
+- [x] Mark unread messages seen only after detail opens, with optimistic rollback.
+  Evidence: the shared detail-success path sends `PATCH /api/messages/{messageID}/seen` with `{seen:true}` after GET success, clears unread immediately, and restores unread without closing detail when PATCH fails; row, keyboard, mobile, and direct-route opens share this path.
+  Verification: `src/App.test.tsx`; `npm test`; `npm run typecheck`.
+
+- [x] Surface a sent-copy storage warning without treating delivery as failed.
+  Evidence: `AppShell` consumes `sentCopyStored`, closes compose on successful delivery, and shows one dismissible responsive `role="status"` notification when the Sent copy was not stored.
+  Verification: `src/App.test.tsx`; `npm test`; `npm run typecheck`.
+
+- [ ] Update selected-message manual QA wording for the mailbox-list entry policy.
+  Evidence: `docs/qa-ui-states.md` still says selected messages restore from `joomail:mail-state`, while live mailbox-list routes now intentionally start unselected and only explicit message routes restore detail.
+  Required: update the manual checklist during the final documentation synchronization task.
 
 - [x] Complete compose overlay controls from the plan or explicitly defer each missing control.
   Evidence: `ComposePanel` now supports desktop minimize/restore and expand/collapse controls.

@@ -12,6 +12,7 @@ import { Toolbar } from "./components/Toolbar";
 import { DevStateSwitcher, type QaState } from "./components/DevStateSwitcher";
 import { LoginPage } from "./components/LoginPage";
 import { AddAccountModal } from "./components/AddAccountModal";
+import { Icon } from "./components/Icon";
 
 const LIST_WIDTH_KEY = "joomail:list-width";
 const REMOTE_IMAGES_KEY = "joomail:remote-images";
@@ -19,6 +20,7 @@ const ACCOUNT_NAMES_KEY = "joomail:account-names";
 const MAIL_STATE_KEY = "joomail:mail-state";
 const DEFAULT_LIST_WIDTH = 388;
 const SEARCH_DEBOUNCE_MS = 300;
+const SENT_COPY_WARNING = "전송은 완료됐지만 보낸편지함에 저장하지 못했습니다";
 const QA_STATES: QaState[] = [
   "normal",
   "loading",
@@ -99,7 +101,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   const [accounts, setAccounts] = useState<Account[]>(initialAccountList);
   const [accountId, setAccountId] = useState(initialAccountId);
   const [mailboxId, setMailboxId] = useState(initialMailboxId);
-  const [selectedMessageId, setSelectedMessageId] = useState(useApi ? routeParams.messageId ?? restoredMailState.byAccount[initialAccountId]?.messageId ?? "" : restoredMailState.byAccount[initialAccountId]?.messageId ?? "m1");
+  const [selectedMessageId, setSelectedMessageId] = useState(useApi ? routeParams.messageId ?? "" : restoredMailState.byAccount[initialAccountId]?.messageId ?? "m1");
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [lastCheckedId, setLastCheckedId] = useState("");
   const [searchInput, setSearchInput] = useState("");
@@ -108,6 +110,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   const [mailStateByAccount, setMailStateByAccount] = useState<Record<string, AccountMailState>>(restoredMailState.byAccount);
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeDirty, setComposeDirty] = useState(false);
+  const [sendWarning, setSendWarning] = useState("");
   const [replyMessageId, setReplyMessageId] = useState<string | null>(null);
   const [composeMode, setComposeMode] = useState<ComposeMode>("compose");
   const [mode, setMode] = useState<MockMode>("normal");
@@ -233,7 +236,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         if (cancelled) return;
         const nextMessages = body.messages.map(summaryToMessage);
         setApiMessages(nextMessages);
-        setSelectedMessageId((current) => (current && nextMessages.some((message) => message.id === current) ? current : nextMessages[0]?.id ?? ""));
+        setSelectedMessageId((current) => (current && nextMessages.some((message) => message.id === current) ? current : ""));
         setMode("normal");
       })
       .catch((error) => {
@@ -262,7 +265,16 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         if (!cancelled) {
           const message = normalizeMessage(body.message);
           setSelectedMessageDetail(message);
-          setApiMessages((current) => current.map((item) => (item.id === message.id ? { ...item, unread: false } : item)));
+          if (message.unread) {
+            updateMessageUnread(message.id, false);
+            void apiJSON(`/api/messages/${encodeURIComponent(message.id)}/seen`, {
+              method: "PATCH",
+              body: JSON.stringify({ seen: true }),
+            }).catch((error) => {
+              updateMessageUnread(message.id, true);
+              if (isUnauthorized(error)) onSessionExpired?.();
+            });
+          }
         }
       })
       .catch((error) => {
@@ -279,6 +291,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   }, [onSessionExpired, selectedMessageId, useApi]);
 
   useEffect(() => {
+    if (useApi) return;
     if (!visibleMessages.length) {
       if (selectedMessageId) setSelectedMessageId("");
       return;
@@ -286,7 +299,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     if (selectedMessageId && !visibleMessages.some((message) => message.id === selectedMessageId)) {
       setSelectedMessageId(visibleMessages[0]?.id ?? "");
     }
-  }, [selectedMessageId, visibleMessages]);
+  }, [selectedMessageId, useApi, visibleMessages]);
 
   useEffect(() => {
     if (searchInput === search) return;
@@ -510,7 +523,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     const restored = mailStateByAccount[nextAccountId];
     setAccountId(nextAccountId);
     setMailboxId(restored?.mailboxId ?? "inbox");
-    setSelectedMessageId(restored?.messageId ?? "");
+    setSelectedMessageId(useApi ? "" : restored?.messageId ?? "");
     setForceEmptyList(false);
     setCheckedIds(new Set());
     setLastCheckedId("");
@@ -531,10 +544,8 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     setForceEmptyList(false);
     setCheckedIds(new Set());
     setLastCheckedId("");
-    const restored = mailStateByAccount[accountId];
-    const restoredMessageId = restored?.mailboxId === nextMailboxId ? restored.messageId : "";
     if (useApi) {
-      setSelectedMessageId(restoredMessageId);
+      setSelectedMessageId("");
       return;
     }
     setMode(nextMailboxId === "spam" ? "error" : "loading");
@@ -611,6 +622,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
       const fromAccount = displayAccounts.find((account) => account.id === draft.fromAccountId);
       const configuredFromName = fromAccount ? accountNames[fromAccount.email]?.trim() : "";
       const nextDraft = { ...draft, fromName: configuredFromName };
+      let response: SendResponse;
       if (draft.attachments?.length) {
         const formData = new FormData();
         formData.set("fromAccountId", nextDraft.fromAccountId);
@@ -621,16 +633,17 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         formData.set("subject", nextDraft.subject);
         formData.set("textBody", nextDraft.textBody);
         nextDraft.attachments?.forEach((file) => formData.append("attachments", file, file.name));
-        await apiJSON("/api/send", {
+        response = await apiJSON<SendResponse>("/api/send", {
           method: "POST",
           body: formData,
         });
       } else {
-        await apiJSON("/api/send", {
+        response = await apiJSON<SendResponse>("/api/send", {
           method: "POST",
           body: JSON.stringify(nextDraft),
         });
       }
+      setSendWarning(response.sentCopyStored ? "" : SENT_COPY_WARNING);
       setReloadToken((value) => value + 1);
     } catch (error) {
       if (isUnauthorized(error)) onSessionExpired?.();
@@ -986,6 +999,14 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         onBulkTrash={() => bulkMoveToKind("trash")}
         onLogout={useApi ? logout : undefined}
       />
+      {sendWarning ? (
+        <div className="fixed bottom-4 left-4 right-4 z-50 flex min-h-11 items-center rounded-lg border border-[#ead8a6] bg-[#fff9e8] px-3 py-2 text-[12.5px] text-[#6f5310] shadow-compose md:left-auto md:right-5 md:w-[430px]" role="status">
+          <span className="min-w-0 flex-1">{sendWarning}</span>
+          <button className="ml-3 flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-black/5" aria-label="전송 알림 닫기" onClick={() => setSendWarning("")} type="button">
+            <Icon name="close" className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : null}
       <div className="hidden h-screen flex-col md:flex">
         <Toolbar search={searchInput} searchInputRef={searchInputRef} onSearch={handleSearch} onRefresh={retry} onSettings={() => setSettingsOpen(true)} />
         <div className="min-h-0 flex flex-1">
@@ -1082,6 +1103,11 @@ function isTypingTarget(target: EventTarget | null) {
 type ApiMessage = Omit<Message, "body"> & {
   textBody?: string[];
   body?: string[];
+};
+
+type SendResponse = {
+  status: "sent";
+  sentCopyStored: boolean;
 };
 
 class ApiError extends Error {
