@@ -66,11 +66,12 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid recipient")
 		return
 	}
-	if err := s.sendMail(auth.credential, request); err != nil {
+	sentCopyStored, err := s.sendMail(auth.credential, request)
+	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to send message")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "sent", "sentCopyStored": sentCopyStored})
 }
 
 func (s *Server) handleSaveDraft(w http.ResponseWriter, r *http.Request) {
@@ -181,9 +182,9 @@ func validateRecipients(request *sendRequest) error {
 	return nil
 }
 
-func (s *Server) sendMail(credential storedCredential, request sendRequest) error {
+func (s *Server) sendMail(credential storedCredential, request sendRequest) (bool, error) {
 	if s.config.SMTPHost == "" || s.config.SMTPPort == "" || s.config.SMTPUserFormat != "localpart" {
-		return errors.New("smtp unavailable")
+		return false, errors.New("smtp unavailable")
 	}
 	message := formatOutgoingMessage(credential.Email, request)
 	recipients := append([]string{}, request.To...)
@@ -200,51 +201,54 @@ func (s *Server) sendMail(credential storedCredential, request sendRequest) erro
 		conn, err = dialer.Dial("tcp", address)
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	_ = conn.SetDeadline(time.Now().Add(smtpCommandTimeout))
 	client, err := smtp.NewClient(conn, s.config.SMTPHost)
 	if err != nil {
 		_ = conn.Close()
-		return err
+		return false, err
 	}
 	defer client.Close()
 
 	if err := client.Hello("localhost"); err != nil {
-		return err
+		return false, err
 	}
 	if s.config.SMTPStartTLS && !smtpImplicitTLS(s.config) {
 		if err := client.StartTLS(newSMTPTLSConfig(s.config.SMTPHost)); err != nil {
-			return err
+			return false, err
 		}
 	}
 	auth := smtp.PlainAuth("", credential.IMAPUsername, credential.Password, s.config.SMTPHost)
 	if err := client.Auth(auth); err != nil {
-		return err
+		return false, err
 	}
 	if err := client.Mail(credential.Email); err != nil {
-		return err
+		return false, err
 	}
 	for _, recipient := range recipients {
 		if err := client.Rcpt(recipient); err != nil {
-			return err
+			return false, err
 		}
 	}
 	writer, err := client.Data()
 	if err != nil {
-		return err
+		return false, err
 	}
 	if _, err := writer.Write([]byte(message)); err != nil {
 		_ = writer.Close()
-		return err
+		return false, err
 	}
 	if err := writer.Close(); err != nil {
-		return err
+		return false, err
 	}
 	if err := client.Quit(); err != nil {
-		return err
+		return false, err
 	}
-	return s.appendSentMessage(credential, message)
+	if err := s.appendSentMessage(credential, message); err != nil {
+		return false, nil
+	}
+	return true, nil
 }
 
 func (s *Server) appendSentMessage(credential storedCredential, message string) error {

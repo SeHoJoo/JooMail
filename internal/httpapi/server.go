@@ -9,17 +9,16 @@ import (
 )
 
 type Server struct {
-	store  *Store
 	config Config
 	mux    *http.ServeMux
 }
 
-func NewServer(store *Store) http.Handler {
-	return NewServerWithConfig(store, LoadConfig())
+func NewServer() http.Handler {
+	return NewServerWithConfig(LoadConfig())
 }
 
-func NewServerWithConfig(store *Store, config Config) http.Handler {
-	server := &Server{store: store, config: config, mux: http.NewServeMux()}
+func NewServerWithConfig(config Config) http.Handler {
+	server := &Server{config: config, mux: http.NewServeMux()}
 	server.routes()
 	return server
 }

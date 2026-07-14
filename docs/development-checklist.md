@@ -34,14 +34,14 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Evidence: attachment downloads use parsed MIME content type with `application/octet-stream` fallback when absent, and formatted download filenames cannot inject response headers.
   Verification: `TestMessageAttachmentRouteDownloadsDecodedAttachment`, `TestExtractAttachmentPayloadDefaultsMissingContentType`, `TestMessageAttachmentDownloadFilenameCannotInjectHeaders`; `go test ./internal/httpapi`.
 - [x] SMTP send with attachments and Sent append exists.
-  Evidence: `POST /api/send`, `internal/httpapi/smtp.go`, SMTP and append tests.
-  Verification: existing send route tests.
+  Evidence: `POST /api/send` reports `sentCopyStored:true` after SMTP delivery plus Sent APPEND, and reports `sentCopyStored:false` with HTTP 200 when delivery succeeds but the Sent copy cannot be stored.
+  Verification: `TestSendUsesStoredCredentialForSMTP`, `TestSendAppendFailureReturnsSuccessWithMissingSentCopy`; `go test ./...`.
 - [x] Send route rejects missing or malformed recipients before SMTP.
   Evidence: `handleSend` trims To/Cc/Bcc recipients, validates them with the Go standard library, and returns `400` for missing or malformed addresses before opening SMTP; `README.md` documents the policy.
   Verification: `TestSendRejectsInvalidRecipientsBeforeSMTP`; `go test ./internal/httpapi`.
 - [x] Send route failure surfaces are pinned and generic.
-  Evidence: SMTP auth failure, RCPT rejection, DATA failure, DATA close failure, and Sent append failure return `502 failed to send message` without leaking upstream server text; `README.md` documents the behavior.
-  Verification: `TestSendSMTPFailuresReturnGenericBadGateway`, `TestSendAppendFailureReturnsGenericBadGatewayAfterSMTP`; `go test ./internal/httpapi`.
+  Evidence: SMTP auth failure, RCPT rejection, DATA failure, and DATA close failure return `502 failed to send message` without leaking upstream server text; a later Sent APPEND failure is a successful delivery response with `sentCopyStored:false` so retry cannot duplicate delivery.
+  Verification: `TestSendSMTPFailuresReturnGenericBadGateway`, `TestSendAppendFailureReturnsSuccessWithMissingSentCopy`; `go test ./internal/httpapi`.
 - [x] Bcc privacy behavior is pinned.
   Evidence: route-level SMTP test captures To/Cc/Bcc RCPT commands and confirms generated DATA contains no Bcc header.
   Verification: `TestSendBccRecipientsDoNotLeakInMessageHeaders`; `go test ./internal/httpapi`.
@@ -89,8 +89,20 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Verification: `TestMessageMoveRouteMovesToNestedArchiveAndTrashTargets`; `go test ./internal/httpapi`.
 
 - [x] Document and test IMAP MOVE fallback behavior.
-  Evidence: `README.md` documents fallback from `UID MOVE` to `UID COPY`, `UID STORE +FLAGS.SILENT (\Deleted)`, and `EXPUNGE`; route tests pin the fallback sequence.
-  Verification: `TestMessageMoveRouteFallsBackToCopyStoreExpunge`; `go test ./internal/httpapi`.
+  Evidence: MOVE capability uses `UID MOVE`; otherwise the backend uses `UID COPY` plus `UID STORE +FLAGS.SILENT (\Deleted)`, attempts only `UID EXPUNGE <uid>` when UIDPLUS exists, and never issues full `EXPUNGE`. A UID EXPUNGE failure after successful COPY/STORE remains move success to avoid duplicate COPY on retry.
+  Verification: `TestMessageMoveRouteMovesMessageToTargetMailbox`, `TestMessageMoveRouteUsesUIDExpungeFallbackWhenUIDPlusSupported`, `TestMessageMoveRouteLeavesDeferredDeletionWithoutUIDPlus`, `TestMessageMoveRouteTreatsUIDExpungeFailureAsSuccess`; `go test ./internal/httpapi`.
+
+- [x] Keep message detail GET read-only and seen changes explicit.
+  Evidence: detail fetch uses `BODY.PEEK[]` and preserves the IMAP `\Seen` state; only `PATCH /api/messages/{messageID}/seen` issues the seen STORE mutation.
+  Verification: `TestMessageDetailDoesNotMarkUnreadMessageSeen`, existing seen route tests; `go test ./internal/httpapi`.
+
+- [x] Exclude deleted messages from regular mailbox lists and searches.
+  Evidence: empty, ASCII text, non-ASCII text, mailbox-scope, and account-scope IMAP searches include `NOT DELETED`, including the non-ASCII charset fallback.
+  Verification: `TestSearchCriteriaQuotesSpecialCharactersAndNonASCII`, `TestMessageSummariesUseServerSideSearchBeforeLimit`, `TestMessageSummariesRetryNonASCIISearchWithoutCharsetWhenRejected`, `TestMessageSummariesAccountScopeSearchesSelectableMailboxes`; `go test ./internal/httpapi`.
+
+- [x] Remove production mock mail/account storage.
+  Evidence: server construction no longer accepts a `Store`, `MockStore` and its hard-coded data are removed, login returns an empty mailbox list until live `/api/accounts` data loads, and protocol fakes remain test-only.
+  Verification: `TestLoginStoresEncryptedCredentialAndSetsRememberedSessionCookie`; `rg 'MockStore|type Store struct'`; `go test ./...`.
 
 - [x] Defer partial bulk move failure handling until a per-message result policy exists.
   Evidence: `bulkMoveMessages` now uses sequential per-message move requests, removes successfully moved messages from local state, leaves failed messages selected, and surfaces a bulk action error without adding a new API response contract.

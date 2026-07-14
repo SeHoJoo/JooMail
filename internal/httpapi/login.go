@@ -119,9 +119,6 @@ func configuredLoginDomain(config Config) string {
 }
 
 func (s *Server) accountForLogin(email string, localPart string) Account {
-	if account, ok := s.store.AccountByEmail(email); ok {
-		return account
-	}
 	return Account{
 		ID:        email,
 		Email:     email,
@@ -129,7 +126,7 @@ func (s *Server) accountForLogin(email string, localPart string) Account {
 		Initials:  firstInitial(localPart),
 		Unread:    0,
 		Storage:   "",
-		Mailboxes: zeroUnreadMailboxes(defaultMailboxes()),
+		Mailboxes: []Mailbox{},
 	}
 }
 
@@ -138,18 +135,6 @@ func firstInitial(value string) string {
 		return string(unicode.ToUpper(r))
 	}
 	return ""
-}
-
-func zeroUnreadMailboxes(mailboxes []Mailbox) []Mailbox {
-	zeroed := make([]Mailbox, len(mailboxes))
-	for i, mailbox := range mailboxes {
-		mailbox.Unread = 0
-		if len(mailbox.Children) > 0 {
-			mailbox.Children = zeroUnreadMailboxes(mailbox.Children)
-		}
-		zeroed[i] = mailbox
-	}
-	return zeroed
 }
 
 func verifyIMAPCredentials(config Config, username string, password string) error {

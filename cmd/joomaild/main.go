@@ -18,7 +18,7 @@ func main() {
 		log.Print("warning: JOOMAIL_SESSION_SECRET is empty; /api/login will fail closed until it is set")
 	}
 
-	server := httpapi.NewServerWithConfig(httpapi.MockStore(), config)
+	server := httpapi.NewServerWithConfig(config)
 	if staticDir := os.Getenv("JOOMAIL_STATIC_DIR"); staticDir != "" {
 		server = httpapi.WithStaticFiles(server, staticDir)
 	}

@@ -71,7 +71,7 @@ func TestProtectedRoutesRejectMissingSession(t *testing.T) {
 
 func TestProtectedRoutesRejectInvalidSession(t *testing.T) {
 	config := testConfig(t, "127.0.0.1", "1")
-	server := NewServerWithConfig(MockStore(), config)
+	server := NewServerWithConfig(config)
 	cookie := &http.Cookie{Name: "joomail_session", Value: "invalid.token"}
 
 	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts", nil, cookie)
@@ -87,7 +87,7 @@ func TestProtectedRoutesRejectExpiredSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new session token: %v", err)
 	}
-	server := NewServerWithConfig(MockStore(), config)
+	server := NewServerWithConfig(config)
 	cookie := &http.Cookie{Name: "joomail_session", Value: token}
 
 	recorder := requestWithServer(t, server, http.MethodGet, "/api/accounts", nil, cookie)
@@ -112,7 +112,7 @@ func TestLoginStoresEncryptedCredentialAndSetsRememberedSessionCookie(t *testing
 		},
 	})
 	config := testConfig(t, host, port)
-	server := NewServerWithConfig(MockStore(), config)
+	server := NewServerWithConfig(config)
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewBufferString(`{"email":"jooseho@good-night.co.kr","password":"correct-password","remember":true}`))
 
@@ -127,6 +127,9 @@ func TestLoginStoresEncryptedCredentialAndSetsRememberedSessionCookie(t *testing
 	decode(t, recorder, &body)
 	if body.Account.Email != "jooseho@good-night.co.kr" {
 		t.Fatalf("account email = %q, want submitted email", body.Account.Email)
+	}
+	if len(body.Account.Mailboxes) != 0 {
+		t.Fatalf("login mailboxes = %#v, want no mock mailboxes before live account load", body.Account.Mailboxes)
 	}
 
 	cookie := sessionCookie(t, recorder)
@@ -174,7 +177,7 @@ func TestLoginRejectsWrongEmailDomainBeforeIMAPLogin(t *testing.T) {
 	})
 	config := testConfig(t, host, port)
 	config.LoginDomain = "good-night.co.kr"
-	server := NewServerWithConfig(MockStore(), config)
+	server := NewServerWithConfig(config)
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewBufferString(`{"email":"jooseho@naver.com","password":"correct-password","remember":true}`))
 
@@ -798,8 +801,8 @@ func TestMessageSummariesUseServerSideSearchBeforeLimit(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
-	if criteria != `TEXT "needle"` {
-		t.Fatalf("search criteria = %q, want server-side TEXT search", criteria)
+	if criteria != `NOT DELETED TEXT "needle"` {
+		t.Fatalf("search criteria = %q, want non-deleted server-side TEXT search", criteria)
 	}
 	var body struct {
 		Messages []MessageSummary `json:"messages"`
@@ -892,9 +895,9 @@ func TestSearchCriteriaQuotesSpecialCharactersAndNonASCII(t *testing.T) {
 		query string
 		want  string
 	}{
-		{name: "empty", query: "   ", want: "ALL"},
-		{name: "spaces quotes parens", query: ` quarterly "roadmap" (final) `, want: `TEXT "quarterly \"roadmap\" (final)"`},
-		{name: "non ascii", query: "한글 검색", want: `CHARSET UTF-8 TEXT "한글 검색"`},
+		{name: "empty", query: "   ", want: "NOT DELETED"},
+		{name: "spaces quotes parens", query: ` quarterly "roadmap" (final) `, want: `NOT DELETED TEXT "quarterly \"roadmap\" (final)"`},
+		{name: "non ascii", query: "한글 검색", want: `CHARSET UTF-8 NOT DELETED TEXT "한글 검색"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -906,8 +909,8 @@ func TestSearchCriteriaQuotesSpecialCharactersAndNonASCII(t *testing.T) {
 }
 
 func TestSearchCriteriaWithoutCharsetOnlyStripsUTF8Prefix(t *testing.T) {
-	criteria, ok := searchCriteriaWithoutCharset(`CHARSET UTF-8 TEXT "한글 검색"`)
-	if !ok || criteria != `TEXT "한글 검색"` {
+	criteria, ok := searchCriteriaWithoutCharset(`CHARSET UTF-8 NOT DELETED TEXT "한글 검색"`)
+	if !ok || criteria != `NOT DELETED TEXT "한글 검색"` {
 		t.Fatalf("fallback criteria = %q ok %v, want charset removed", criteria, ok)
 	}
 	if criteria, ok := searchCriteriaWithoutCharset(`TEXT "plain"`); ok || criteria != "" {
@@ -943,7 +946,7 @@ func TestMessageSummariesRetryNonASCIISearchWithoutCharsetWhenRejected(t *testin
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
-	wantCriteria := []string{`CHARSET UTF-8 TEXT "한글"`, `TEXT "한글"`}
+	wantCriteria := []string{`CHARSET UTF-8 NOT DELETED TEXT "한글"`, `NOT DELETED TEXT "한글"`}
 	if !slicesEqual(criteria, wantCriteria) {
 		t.Fatalf("criteria = %#v, want charset retry %#v", criteria, wantCriteria)
 	}
@@ -971,7 +974,6 @@ func TestIMAPMailboxNamesWithQuotesAndBackslashes(t *testing.T) {
 	var searched []string
 	var fetched []string
 	var statusMailboxes []string
-	var moved []string
 	var copied []string
 	var appended []string
 	host, port := startFakeIMAPServer(t, fakeIMAPScript{
@@ -990,10 +992,6 @@ func TestIMAPMailboxNamesWithQuotesAndBackslashes(t *testing.T) {
 		onStatus: func(mailbox string) (int, string) {
 			statusMailboxes = append(statusMailboxes, mailbox)
 			return 3, "OK STATUS completed"
-		},
-		onMove: func(mailbox string, uid string, target string) string {
-			moved = append(moved, mailbox+"->"+target)
-			return "NO MOVE unavailable"
 		},
 		onCopy: func(mailbox string, uid string, target string) string {
 			copied = append(copied, mailbox+"->"+target)
@@ -1033,9 +1031,6 @@ func TestIMAPMailboxNamesWithQuotesAndBackslashes(t *testing.T) {
 	}
 	if !containsString(statusMailboxes, sourceMailbox) {
 		t.Fatalf("status mailboxes = %#v, want source mailbox", statusMailboxes)
-	}
-	if !containsString(moved, sourceMailbox+"->"+targetMailbox) {
-		t.Fatalf("move commands = %#v, want source to target", moved)
 	}
 	if !containsString(copied, sourceMailbox+"->"+targetMailbox) {
 		t.Fatalf("copy commands = %#v, want fallback source to target", copied)
@@ -1088,7 +1083,7 @@ func TestMessageSummariesAccountScopeSearchesSelectableMailboxes(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
-	if !slices.Contains(searched, `INBOX:TEXT "report"`) || !slices.Contains(searched, `Archive:TEXT "report"`) {
+	if !slices.Contains(searched, `INBOX:NOT DELETED TEXT "report"`) || !slices.Contains(searched, `Archive:NOT DELETED TEXT "report"`) {
 		t.Fatalf("searched mailboxes = %#v, want INBOX and Archive", searched)
 	}
 	var body struct {
@@ -1237,7 +1232,7 @@ func TestAccountsSkipFailedUnreadCountsPerMailbox(t *testing.T) {
 	}
 }
 
-func TestMessageDetailMarksUnreadMessageSeen(t *testing.T) {
+func TestMessageDetailDoesNotMarkUnreadMessageSeen(t *testing.T) {
 	rawMessage := strings.Join([]string{
 		"From: Alice <alice@example.com>",
 		"To: Jooseho <jooseho@good-night.co.kr>",
@@ -1274,15 +1269,15 @@ func TestMessageDetailMarksUnreadMessageSeen(t *testing.T) {
 	if detailRecorder.Code != http.StatusOK {
 		t.Fatalf("detail status = %d, want %d; body = %s", detailRecorder.Code, http.StatusOK, detailRecorder.Body.String())
 	}
-	if storedUID != "7" {
-		t.Fatalf("stored UID = %q, want 7", storedUID)
+	if storedUID != "" {
+		t.Fatalf("stored UID = %q, want no STORE during detail GET", storedUID)
 	}
 	var detailBody struct {
 		Message Message `json:"message"`
 	}
 	decode(t, detailRecorder, &detailBody)
-	if detailBody.Message.Unread {
-		t.Fatalf("detail unread = true, want false after marking seen")
+	if !detailBody.Message.Unread {
+		t.Fatalf("detail unread = false, want original unread state")
 	}
 }
 
@@ -1380,7 +1375,8 @@ func TestMessageMoveRouteMovesMessageToTargetMailbox(t *testing.T) {
 	var movedUID string
 	var movedTarget string
 	host, port := startFakeIMAPServer(t, fakeIMAPScript{
-		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		capabilities: []string{"IMAP4rev1", "MOVE"},
+		onLogin:      func(username, password string) string { return "OK LOGIN completed" },
 		onMove: func(mailbox string, uid string, target string) string {
 			movedUID = uid
 			movedTarget = target
@@ -1407,7 +1403,8 @@ func TestMessageMoveRouteMovesToNestedArchiveAndTrashTargets(t *testing.T) {
 			var movedUID string
 			var movedTarget string
 			host, port := startFakeIMAPServer(t, fakeIMAPScript{
-				onLogin: func(username, password string) string { return "OK LOGIN completed" },
+				capabilities: []string{"IMAP4rev1", "MOVE"},
+				onLogin:      func(username, password string) string { return "OK LOGIN completed" },
 				onMove: func(mailbox string, uid string, target string) string {
 					movedUID = uid
 					movedTarget = target
@@ -1431,13 +1428,14 @@ func TestMessageMoveRouteMovesToNestedArchiveAndTrashTargets(t *testing.T) {
 	}
 }
 
-func TestMessageMoveRouteFallsBackToCopyStoreExpunge(t *testing.T) {
+func TestMessageMoveRouteUsesUIDExpungeFallbackWhenUIDPlusSupported(t *testing.T) {
 	var events []string
 	host, port := startFakeIMAPServer(t, fakeIMAPScript{
-		onLogin: func(username, password string) string { return "OK LOGIN completed" },
+		capabilities: []string{"IMAP4rev1", "UIDPLUS"},
+		onLogin:      func(username, password string) string { return "OK LOGIN completed" },
 		onMove: func(mailbox string, uid string, target string) string {
 			events = append(events, "MOVE "+uid+" "+target)
-			return "NO MOVE unavailable"
+			return "BAD MOVE must not be attempted"
 		},
 		onCopy: func(mailbox string, uid string, target string) string {
 			events = append(events, "COPY "+uid+" "+target)
@@ -1447,9 +1445,13 @@ func TestMessageMoveRouteFallsBackToCopyStoreExpunge(t *testing.T) {
 			events = append(events, "STORE "+uid+" "+operation+" "+flag)
 			return "OK STORE completed"
 		},
+		onUIDExpunge: func(mailbox string, uid string) string {
+			events = append(events, "UID EXPUNGE "+uid)
+			return "OK UID EXPUNGE completed"
+		},
 		onExpunge: func(mailbox string) string {
-			events = append(events, "EXPUNGE "+mailbox)
-			return "OK EXPUNGE completed"
+			events = append(events, "FULL EXPUNGE "+mailbox)
+			return "BAD full EXPUNGE must not be attempted"
 		},
 		messages: map[string]map[string]string{"INBOX": {"7": "From: Alice <alice@example.com>\r\nSubject: Move\r\n\r\nBody"}},
 	})
@@ -1462,13 +1464,70 @@ func TestMessageMoveRouteFallsBackToCopyStoreExpunge(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
 	want := []string{
-		"MOVE 7 Archive",
 		"COPY 7 Archive",
 		`STORE 7 +FLAGS.SILENT (\Deleted)`,
-		"EXPUNGE INBOX",
+		"UID EXPUNGE 7",
 	}
 	if !slicesEqual(events, want) {
 		t.Fatalf("events = %#v, want fallback sequence %#v", events, want)
+	}
+}
+
+func TestMessageMoveRouteLeavesDeferredDeletionWithoutUIDPlus(t *testing.T) {
+	var events []string
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		capabilities: []string{"IMAP4rev1"},
+		onLogin:      func(username, password string) string { return "OK LOGIN completed" },
+		onMove: func(mailbox string, uid string, target string) string {
+			events = append(events, "MOVE "+uid+" "+target)
+			return "BAD MOVE must not be attempted"
+		},
+		onCopy: func(mailbox string, uid string, target string) string {
+			events = append(events, "COPY "+uid+" "+target)
+			return "OK COPY completed"
+		},
+		onStore: func(mailbox string, uid string, operation string, flag string) string {
+			events = append(events, "STORE "+uid+" "+operation+" "+flag)
+			return "OK STORE completed"
+		},
+		onExpunge: func(mailbox string) string {
+			events = append(events, "FULL EXPUNGE "+mailbox)
+			return "BAD full EXPUNGE must not be attempted"
+		},
+		messages: map[string]map[string]string{"INBOX": {"7": "From: Alice <alice@example.com>\r\nSubject: Move\r\n\r\nBody"}},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodPost, "/api/messages/"+messageID("inbox", "7")+"/move", strings.NewReader(`{"mailboxId":"mbox_QXJjaGl2ZQ"}`), cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	want := []string{"COPY 7 Archive", `STORE 7 +FLAGS.SILENT (\Deleted)`}
+	if !slicesEqual(events, want) {
+		t.Fatalf("events = %#v, want deferred-deletion fallback %#v", events, want)
+	}
+}
+
+func TestMessageMoveRouteTreatsUIDExpungeFailureAsSuccess(t *testing.T) {
+	host, port := startFakeIMAPServer(t, fakeIMAPScript{
+		capabilities: []string{"IMAP4rev1", "UIDPLUS"},
+		onLogin:      func(username, password string) string { return "OK LOGIN completed" },
+		onMove:       func(mailbox string, uid string, target string) string { return "BAD MOVE must not be attempted" },
+		onCopy:       func(mailbox string, uid string, target string) string { return "OK COPY completed" },
+		onStore:      func(mailbox string, uid string, operation string, flag string) string { return "OK STORE completed" },
+		onUIDExpunge: func(mailbox string, uid string) string {
+			return "NO UID EXPUNGE failed"
+		},
+		onExpunge: func(mailbox string) string { return "NO EXPUNGE failed" },
+		messages:  map[string]map[string]string{"INBOX": {"7": "From: Alice <alice@example.com>\r\nSubject: Move\r\n\r\nBody"}},
+	})
+	server, cookie := loginTestSession(t, testConfig(t, host, port))
+
+	recorder := requestWithServer(t, server, http.MethodPost, "/api/messages/"+messageID("inbox", "7")+"/move", strings.NewReader(`{"mailboxId":"mbox_QXJjaGl2ZQ"}`), cookie)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d after COPY and STORE; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
 }
 
@@ -2150,6 +2209,14 @@ func TestSendUsesStoredCredentialForSMTP(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
+	var response struct {
+		Status         string `json:"status"`
+		SentCopyStored bool   `json:"sentCopyStored"`
+	}
+	decode(t, recorder, &response)
+	if response.Status != "sent" || !response.SentCopyStored {
+		t.Fatalf("send response = %#v, want sent with stored copy", response)
+	}
 	authPayload := decodeSMTPPlainAuth(t, smtpAuthLine)
 	if authPayload != "\x00jooseho\x00mail-password" {
 		t.Fatalf("smtp auth payload = %q", authPayload)
@@ -2357,7 +2424,7 @@ func TestSendSMTPFailuresReturnGenericBadGateway(t *testing.T) {
 	}
 }
 
-func TestSendAppendFailureReturnsGenericBadGatewayAfterSMTP(t *testing.T) {
+func TestSendAppendFailureReturnsSuccessWithMissingSentCopy(t *testing.T) {
 	imapHost, imapPort := startFakeIMAPServer(t, fakeIMAPScript{
 		mailboxes: []string{"INBOX", "Sent"},
 		onLogin:   func(username, password string) string { return "OK LOGIN completed" },
@@ -2375,7 +2442,17 @@ func TestSendAppendFailureReturnsGenericBadGatewayAfterSMTP(t *testing.T) {
 
 	recorder := requestWithServer(t, server, http.MethodPost, "/api/send", strings.NewReader(`{"to":["alice@example.com"],"subject":"Hello","textBody":"Plain message"}`), cookie)
 
-	assertSendBadGateway(t, recorder)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var response struct {
+		Status         string `json:"status"`
+		SentCopyStored bool   `json:"sentCopyStored"`
+	}
+	decode(t, recorder, &response)
+	if response.Status != "sent" || response.SentCopyStored {
+		t.Fatalf("send response = %#v, want sent with missing stored copy", response)
+	}
 	if !strings.Contains(smtpData, "Subject: Hello") {
 		t.Fatalf("smtp data = %q, want SMTP send attempted before append failure", smtpData)
 	}
@@ -2500,7 +2577,7 @@ func TestStaticFilesKeepAPIRoutes(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "index.html"), "app shell")
 
-	server := WithStaticFiles(NewServer(MockStore()), dir)
+	server := WithStaticFiles(NewServer(), dir)
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	server.ServeHTTP(recorder, req)
@@ -2514,7 +2591,7 @@ func TestStaticFilesFallbackToIndex(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "index.html"), "app shell")
 
-	server := WithStaticFiles(NewServer(MockStore()), dir)
+	server := WithStaticFiles(NewServer(), dir)
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/mail/personal/inbox", nil)
 	server.ServeHTTP(recorder, req)
@@ -2529,7 +2606,7 @@ func TestStaticFilesFallbackToIndex(t *testing.T) {
 
 func request(t *testing.T, method string, path string, body io.Reader, cookie *http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
-	return requestWithServer(t, NewServer(MockStore()), method, path, body, cookie)
+	return requestWithServer(t, NewServer(), method, path, body, cookie)
 }
 
 func requestWithServer(t *testing.T, server http.Handler, method string, path string, body io.Reader, cookie *http.Cookie) *httptest.ResponseRecorder {
@@ -2665,7 +2742,7 @@ func loginTestSession(t *testing.T, config Config) (http.Handler, *http.Cookie) 
 
 func loginTestSessionWithPassword(t *testing.T, config Config, password string) (http.Handler, *http.Cookie) {
 	t.Helper()
-	server := NewServerWithConfig(MockStore(), config)
+	server := NewServerWithConfig(config)
 	recorder := httptest.NewRecorder()
 	body := fmt.Sprintf(`{"email":"jooseho@good-night.co.kr","password":%q,"remember":false}`, password)
 	req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
@@ -2706,6 +2783,7 @@ func credentialFiles(t *testing.T, dir string) []string {
 }
 
 type fakeIMAPScript struct {
+	capabilities        []string
 	onLogin             func(username, password string) string
 	onSelect            func(mailbox string) string
 	onStatus            func(mailbox string) (int, string)
@@ -2715,6 +2793,7 @@ type fakeIMAPScript struct {
 	onMove              func(mailbox string, uid string, target string) string
 	onCopy              func(mailbox string, uid string, target string) string
 	onExpunge           func(mailbox string) string
+	onUIDExpunge        func(mailbox string, uid string) string
 	onFetch             func(mailbox string, uidSet string, dataItems string)
 	appendLines         *[]string
 	mailboxes           []string
@@ -2768,6 +2847,12 @@ func handleFakeIMAPConn(conn net.Conn, script fakeIMAPScript) {
 		tag := fields[0]
 		command := strings.ToUpper(fields[1])
 		switch command {
+		case "CAPABILITY":
+			capabilities := script.capabilities
+			if len(capabilities) == 0 {
+				capabilities = []string{"IMAP4rev1"}
+			}
+			_, _ = fmt.Fprintf(conn, "* CAPABILITY %s\r\n%s OK CAPABILITY completed\r\n", strings.Join(capabilities, " "), tag)
 		case "LOGIN":
 			username := unquoteIMAPTestString(fields[2])
 			password := unquoteIMAPTestString(fields[3])
@@ -2870,6 +2955,16 @@ func handleFakeIMAPConn(conn net.Conn, script fakeIMAPScript) {
 				response := "OK COPY completed"
 				if script.onCopy != nil {
 					response = script.onCopy(selectedMailbox, fields[3], unquoteIMAPTestString(fields[4]))
+				}
+				_, _ = conn.Write([]byte(tag + " " + response + "\r\n"))
+			case "EXPUNGE":
+				if len(fields) < 4 {
+					_, _ = conn.Write([]byte(tag + " BAD UID EXPUNGE command failed\r\n"))
+					continue
+				}
+				response := "OK UID EXPUNGE completed"
+				if script.onUIDExpunge != nil {
+					response = script.onUIDExpunge(selectedMailbox, fields[3])
 				}
 				_, _ = conn.Write([]byte(tag + " " + response + "\r\n"))
 			}

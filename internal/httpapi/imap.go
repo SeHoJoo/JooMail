@@ -30,6 +30,8 @@ const (
 	messageSummaryLimit = 50
 )
 
+var ErrNotFound = errors.New("not found")
+
 var remoteImageSrcPattern = regexp.MustCompile(`(?i)(<img\b[^>]*?)\s+src\s*=\s*("https?://[^"]*"|'https?://[^']*'|https?://[^\s>]+)`)
 var cidImageSrcPattern = regexp.MustCompile(`(?i)(<img\b[^>]*?)\s+src\s*=\s*("cid:[^"]+"|'cid:[^']+'|cid:[^\s>]+)`)
 var dataImageSrcPattern = regexp.MustCompile(`(?i)^data:image/(gif|jpeg|png|webp);base64,[a-z0-9+/]+=*$`)
@@ -298,14 +300,7 @@ func (c *imapClient) message(accountID string, messageID string) (Message, error
 	if len(messages) == 0 {
 		return Message{}, ErrNotFound
 	}
-	message := messages[0]
-	if message.Unread {
-		if err := c.markMessageSeen(uid); err != nil {
-			return Message{}, err
-		}
-		message.Unread = false
-	}
-	return message, nil
+	return messages[0], nil
 }
 
 func (c *imapClient) messageAttachment(messageID string, attachmentID string) (AttachmentPayload, error) {
@@ -337,17 +332,6 @@ func (c *imapClient) messageAttachment(messageID string, attachmentID string) (A
 		return attachment, err
 	}
 	return AttachmentPayload{}, ErrNotFound
-}
-
-func (c *imapClient) markMessageSeen(uid string) error {
-	responses, err := c.command("UID STORE %s +FLAGS.SILENT (\\Seen)", uid)
-	if err != nil {
-		return err
-	}
-	if taggedStatus(responses) != "OK" {
-		return errors.New("store failed")
-	}
-	return nil
 }
 
 func (c *imapClient) setMessageSeen(messageID string, seen bool) error {
@@ -424,20 +408,44 @@ func (c *imapClient) moveMessage(messageID string, targetMailboxID string) error
 	} else if taggedStatus(responses) != "OK" {
 		return ErrNotFound
 	}
-	responses, err := c.command("UID MOVE %s %s", uid, quoteIMAPString(targetMailboxName))
+	capabilities, err := c.capabilities()
 	if err != nil {
 		return err
 	}
-	if taggedStatus(responses) == "OK" {
+	if capabilities["MOVE"] {
+		responses, err := c.command("UID MOVE %s %s", uid, quoteIMAPString(targetMailboxName))
+		if err != nil {
+			return err
+		}
+		if taggedStatus(responses) != "OK" {
+			return errors.New("move failed")
+		}
 		return nil
 	}
-	if err := c.copyThenDeleteMessage(uid, targetMailboxName); err != nil {
-		return err
-	}
-	return nil
+	return c.copyThenDeleteMessage(uid, targetMailboxName, capabilities["UIDPLUS"])
 }
 
-func (c *imapClient) copyThenDeleteMessage(uid string, targetMailboxName string) error {
+func (c *imapClient) capabilities() (map[string]bool, error) {
+	responses, err := c.command("CAPABILITY")
+	if err != nil {
+		return nil, err
+	}
+	if taggedStatus(responses) != "OK" {
+		return nil, errors.New("capability failed")
+	}
+	capabilities := make(map[string]bool)
+	for _, response := range responses {
+		if !strings.HasPrefix(strings.ToUpper(response.line), "* CAPABILITY ") {
+			continue
+		}
+		for _, capability := range strings.Fields(strings.TrimSpace(response.line[len("* CAPABILITY "):])) {
+			capabilities[strings.ToUpper(capability)] = true
+		}
+	}
+	return capabilities, nil
+}
+
+func (c *imapClient) copyThenDeleteMessage(uid string, targetMailboxName string, uidPlus bool) error {
 	responses, err := c.command("UID COPY %s %s", uid, quoteIMAPString(targetMailboxName))
 	if err != nil {
 		return err
@@ -452,12 +460,8 @@ func (c *imapClient) copyThenDeleteMessage(uid string, targetMailboxName string)
 	if taggedStatus(responses) != "OK" {
 		return errors.New("store failed")
 	}
-	responses, err = c.command("EXPUNGE")
-	if err != nil {
-		return err
-	}
-	if taggedStatus(responses) != "OK" {
-		return errors.New("expunge failed")
+	if uidPlus {
+		_, _ = c.command("UID EXPUNGE %s", uid)
 	}
 	return nil
 }
@@ -509,9 +513,9 @@ func (c *imapClient) searchMailbox(mailboxName string, query string) ([]string, 
 func searchCriteria(query string) string {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return "ALL"
+		return "NOT DELETED"
 	}
-	criterion := "TEXT " + quoteIMAPString(query)
+	criterion := "NOT DELETED TEXT " + quoteIMAPString(query)
 	if isASCII(query) {
 		return criterion
 	}
