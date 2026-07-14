@@ -20,6 +20,10 @@ const routes = [
   ["nested-tree", "/?qa=nested-tree"],
   ["mobile-reading-attachments", "/?qa=mobile-reading-attachments"],
   ["compose-cc-bcc", "/?qa=compose-cc-bcc"],
+  ["send-warning", "/?qa=send-warning"],
+  ["multi-account", "/?qa=multi-account"],
+  ["account-unavailable", "/?qa=account-unavailable"],
+  ["starred", "/?qa=starred"],
 ] as const;
 
 const viewports = [

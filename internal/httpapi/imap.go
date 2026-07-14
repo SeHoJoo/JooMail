@@ -225,6 +225,9 @@ func (c *imapClient) appendMessage(mailboxName string, raw string, flags string)
 }
 
 func (c *imapClient) messageSummaries(accountID string, mailboxID string, query string, scope messageSearchScope) ([]MessageSummary, error) {
+	if mailboxID == "starred" {
+		return c.starredMessageSummaries(accountID, query)
+	}
 	mailboxName, err := decodeMailboxID(mailboxID)
 	if err != nil {
 		return nil, err
@@ -250,6 +253,37 @@ func (c *imapClient) messageSummaries(accountID string, mailboxID string, query 
 		summaries = append(summaries, message.MessageSummary)
 	}
 	return summaries, nil
+}
+
+func (c *imapClient) starredMessageSummaries(accountID string, query string) ([]MessageSummary, error) {
+	names, err := c.listMailboxNames()
+	if err != nil {
+		return nil, err
+	}
+	var messages []Message
+	for _, name := range names {
+		uids, err := c.searchMailboxCriteria(name, flaggedSearchCriteria(query))
+		if err != nil {
+			return nil, err
+		}
+		if len(uids) > messageSummaryLimit {
+			uids = uids[:messageSummaryLimit]
+		}
+		items, err := c.fetchMessages(accountID, mailboxID(name), name, uids)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, items...)
+	}
+	sortMessagesNewestFirst(messages)
+	if len(messages) > messageSummaryLimit {
+		messages = messages[:messageSummaryLimit]
+	}
+	out := make([]MessageSummary, 0, len(messages))
+	for _, message := range messages {
+		out = append(out, message.MessageSummary)
+	}
+	return out, nil
 }
 
 func (c *imapClient) accountMessageSummaries(accountID string, query string) ([]MessageSummary, error) {
@@ -285,7 +319,7 @@ func (c *imapClient) accountMessageSummaries(accountID string, query string) ([]
 }
 
 func (c *imapClient) message(accountID string, messageID string) (Message, error) {
-	mailboxID, uid, err := decodeMessageID(messageID)
+	_, mailboxID, expectedUIDValidity, uid, _, err := decodeMessageReference(messageID)
 	if err != nil {
 		return Message{}, ErrNotFound
 	}
@@ -298,6 +332,9 @@ func (c *imapClient) message(accountID string, messageID string) (Message, error
 		return Message{}, err
 	}
 	if len(messages) == 0 {
+		return Message{}, ErrNotFound
+	}
+	if expectedUIDValidity != "" && expectedUIDValidity != messageUIDValidity(messages[0].ID) {
 		return Message{}, ErrNotFound
 	}
 	return messages[0], nil
@@ -467,12 +504,15 @@ func (c *imapClient) copyThenDeleteMessage(uid string, targetMailboxName string,
 }
 
 func (c *imapClient) searchMailbox(mailboxName string, query string) ([]string, error) {
+	return c.searchMailboxCriteria(mailboxName, searchCriteria(query))
+}
+
+func (c *imapClient) searchMailboxCriteria(mailboxName string, criteria string) ([]string, error) {
 	if responses, err := c.command("SELECT %s", quoteIMAPString(mailboxName)); err != nil {
 		return nil, err
 	} else if taggedStatus(responses) != "OK" {
 		return nil, errors.New("select failed")
 	}
-	criteria := searchCriteria(query)
 	responses, err := c.command("UID SEARCH %s", criteria)
 	if err != nil {
 		return nil, err
@@ -508,6 +548,14 @@ func (c *imapClient) searchMailbox(mailboxName string, query string) ([]string, 
 		out[i] = strconv.Itoa(uid)
 	}
 	return out, nil
+}
+
+func flaggedSearchCriteria(query string) string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "FLAGGED NOT DELETED"
+	}
+	return "FLAGGED NOT DELETED TEXT " + quoteIMAPString(query)
 }
 
 func searchCriteria(query string) string {
@@ -563,7 +611,38 @@ func (c *imapClient) withUnreadCounts(mailboxes []Mailbox) []Mailbox {
 		}
 		counts[mailbox.ID] = count
 	}
-	return applyUnreadCounts(mailboxes, counts)
+	mailboxes = applyUnreadCounts(mailboxes, counts)
+	starred, err := c.starredUnreadCount(flattenSelectableMailboxes(mailboxes))
+	if err == nil {
+		mailboxes = addStarredMailbox(mailboxes, starred)
+	}
+	return mailboxes
+}
+
+func (c *imapClient) starredUnreadCount(mailboxes []Mailbox) (int, error) {
+	total := 0
+	for _, mailbox := range mailboxes {
+		name, err := decodeMailboxID(mailbox.ID)
+		if err != nil {
+			continue
+		}
+		uids, err := c.searchMailboxCriteria(name, "FLAGGED UNSEEN NOT DELETED")
+		if err != nil {
+			return 0, err
+		}
+		total += len(uids)
+	}
+	return total, nil
+}
+
+func addStarredMailbox(mailboxes []Mailbox, unread int) []Mailbox {
+	starred := Mailbox{ID: "starred", Label: "중요 표시", Kind: "starred", Selectable: true, Unread: unread}
+	for i, mailbox := range mailboxes {
+		if mailbox.Kind == "inbox" {
+			return append(append(mailboxes[:i+1:i+1], starred), mailboxes[i+1:]...)
+		}
+	}
+	return append([]Mailbox{starred}, mailboxes...)
 }
 
 func (c *imapClient) mailboxUnreadCount(mailboxName string) (int, error) {
@@ -621,10 +700,15 @@ func (c *imapClient) fetchMessages(accountID string, mailboxID string, mailboxNa
 	if len(uids) == 0 {
 		return nil, nil
 	}
-	if responses, err := c.command("SELECT %s", quoteIMAPString(mailboxName)); err != nil {
+	selectResponses, err := c.command("SELECT %s", quoteIMAPString(mailboxName))
+	if err != nil {
 		return nil, err
-	} else if taggedStatus(responses) != "OK" {
+	} else if taggedStatus(selectResponses) != "OK" {
 		return nil, errors.New("select failed")
+	}
+	uidValidity := selectUIDValidity(selectResponses)
+	if uidValidity == "" {
+		uidValidity = "0"
 	}
 	responses, err := c.command("UID FETCH %s (FLAGS BODY.PEEK[])", strings.Join(uids, ","))
 	if err != nil {
@@ -641,12 +725,25 @@ func (c *imapClient) fetchMessages(accountID string, mailboxID string, mailboxNa
 		}
 		message, err := parseRawMessage(accountID, mailboxID, uid, response.literal)
 		if err == nil {
+			message.ID = messageID(accountID, mailboxID, uidValidity, uid)
 			message.Unread = !responseSeen(response.line)
 			message.Flagged = responseFlagged(response.line)
 			messages = append(messages, message)
 		}
 	}
 	return messages, nil
+}
+
+func selectUIDValidity(responses []imapResponse) string {
+	for _, response := range responses {
+		fields := strings.Fields(strings.Trim(response.line, "()"))
+		for i, field := range fields {
+			if strings.EqualFold(field, "UIDVALIDITY") && i+1 < len(fields) {
+				return strings.Trim(fields[i+1], ")")
+			}
+		}
+	}
+	return ""
 }
 
 func (c *imapClient) command(format string, args ...any) ([]imapResponse, error) {
@@ -765,8 +862,10 @@ func mailboxKindOrder(kind string) int {
 	switch kind {
 	case "inbox":
 		return 0
-	case "sent":
+	case "starred":
 		return 1
+	case "sent":
+		return 2
 	case "drafts":
 		return 2
 	case "archive":
@@ -1046,11 +1145,28 @@ func mailboxKind(name string) string {
 	}
 }
 
-func messageID(mailboxID string, uid string) string {
-	return "msg_" + base64.RawURLEncoding.EncodeToString([]byte(mailboxID+"\x00"+uid))
+func messageID(parts ...string) string {
+	if len(parts) == 2 { // test and legacy compatibility helper
+		return "msg_" + base64.RawURLEncoding.EncodeToString([]byte(parts[0]+"\x00"+parts[1]))
+	}
+	if len(parts) != 4 {
+		return ""
+	}
+	return "msg2_" + base64.RawURLEncoding.EncodeToString([]byte(strings.Join(parts, "\x00")))
 }
 
 func decodeMessageID(id string) (string, string, error) {
+	if strings.HasPrefix(id, "msg2_") {
+		decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(id, "msg2_"))
+		if err != nil {
+			return "", "", err
+		}
+		parts := strings.Split(string(decoded), "\x00")
+		if len(parts) != 4 || parts[1] == "" || parts[3] == "" {
+			return "", "", errors.New("invalid message id")
+		}
+		return parts[1], parts[3], nil
+	}
 	if !strings.HasPrefix(id, "msg_") {
 		return "", "", errors.New("invalid message id")
 	}
@@ -1063,6 +1179,22 @@ func decodeMessageID(id string) (string, string, error) {
 		return "", "", errors.New("invalid message id")
 	}
 	return mailboxID, uid, nil
+}
+
+func decodeMessageReference(id string) (accountID string, mailboxID string, uidValidity string, uid string, legacy bool, err error) {
+	if !strings.HasPrefix(id, "msg2_") {
+		mailboxID, uid, err = decodeMessageID(id)
+		return "", mailboxID, "", uid, true, err
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(id, "msg2_"))
+	if err != nil {
+		return "", "", "", "", false, err
+	}
+	parts := strings.Split(string(decoded), "\x00")
+	if len(parts) != 4 || parts[0] == "" || parts[1] == "" || parts[2] == "" || parts[3] == "" {
+		return "", "", "", "", false, errors.New("invalid message id")
+	}
+	return parts[0], parts[1], parts[2], parts[3], false, nil
 }
 
 func parseRawMessage(accountID string, mailboxID string, uid string, raw []byte) (Message, error) {
@@ -1089,7 +1221,7 @@ func parseRawMessage(accountID string, mailboxID string, uid string, raw []byte)
 
 	return Message{
 		MessageSummary: MessageSummary{
-			ID:            messageID(mailboxID, uid),
+			ID:            messageID(accountID, mailboxID, "0", uid),
 			AccountID:     accountID,
 			MailboxID:     mailboxID,
 			ThreadID:      threadID,
@@ -1149,6 +1281,14 @@ func messageUID(id string) int {
 		return 0
 	}
 	return parsed
+}
+
+func messageUIDValidity(id string) string {
+	_, _, uidValidity, _, _, err := decodeMessageReference(id)
+	if err != nil {
+		return ""
+	}
+	return uidValidity
 }
 
 func parseMessageBody(header mail.Header, body io.Reader) ([]string, string, []Attachment, bool) {

@@ -28,13 +28,14 @@ var newSMTPTLSConfig = func(host string) *tls.Config {
 }
 
 type sendRequest struct {
-	FromName    string               `json:"fromName"`
-	To          []string             `json:"to"`
-	Cc          []string             `json:"cc"`
-	Bcc         []string             `json:"bcc"`
-	Subject     string               `json:"subject"`
-	TextBody    string               `json:"textBody"`
-	Attachments []outgoingAttachment `json:"-"`
+	FromAccountID string               `json:"fromAccountId"`
+	FromName      string               `json:"fromName"`
+	To            []string             `json:"to"`
+	Cc            []string             `json:"cc"`
+	Bcc           []string             `json:"bcc"`
+	Subject       string               `json:"subject"`
+	TextBody      string               `json:"textBody"`
+	Attachments   []outgoingAttachment `json:"-"`
 }
 
 type outgoingAttachment struct {
@@ -66,7 +67,12 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid recipient")
 		return
 	}
-	sentCopyStored, err := s.sendMail(auth.credential, request)
+	credential, valid := auth.credentialForOutgoing(request.FromAccountID)
+	if !valid {
+		writeError(w, http.StatusBadRequest, "invalid from account")
+		return
+	}
+	sentCopyStored, err := s.sendMail(credential, request)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to send message")
 		return
@@ -85,7 +91,12 @@ func (s *Server) handleSaveDraft(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid draft request")
 		return
 	}
-	if err := s.saveDraft(auth.credential, request); err != nil {
+	credential, valid := auth.credentialForOutgoing(request.FromAccountID)
+	if !valid {
+		writeError(w, http.StatusBadRequest, "invalid from account")
+		return
+	}
+	if err := s.saveDraft(credential, request); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to save draft")
 		return
 	}
@@ -109,6 +120,7 @@ func parseMultipartSendRequest(r *http.Request, request *sendRequest) error {
 	request.Cc = formRecipientList(r, "cc")
 	request.Bcc = formRecipientList(r, "bcc")
 	request.FromName = r.FormValue("fromName")
+	request.FromAccountID = r.FormValue("fromAccountId")
 	request.Subject = r.FormValue("subject")
 	request.TextBody = r.FormValue("textBody")
 	if r.MultipartForm == nil {

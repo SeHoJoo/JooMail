@@ -32,6 +32,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)
 	s.mux.HandleFunc("POST /api/logout", s.handleLogout)
 	s.mux.HandleFunc("GET /api/accounts", s.handleAccounts)
+	s.mux.HandleFunc("POST /api/accounts", s.handleAddAccount)
 	s.mux.HandleFunc("GET /api/accounts/{accountID}/mailboxes/{mailboxID}/messages", s.handleMessageSummaries)
 	s.mux.HandleFunc("GET /api/messages/{messageID}", s.handleMessage)
 	s.mux.HandleFunc("GET /api/messages/{messageID}/attachments/{attachmentID}", s.handleMessageAttachment)
@@ -53,19 +54,81 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	client, err := openIMAPSession(s.config, auth.credential)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "failed to load accounts")
+	type result struct {
+		index   int
+		account Account
+	}
+	results := make(chan result, len(auth.credentials.Accounts))
+	for index, credential := range auth.credentials.Accounts {
+		go func(index int, credential storedCredential) {
+			account := s.accountForSession(credential.Email, nil)
+			account.Status = "unavailable"
+			client, err := openIMAPSession(s.config, credential)
+			if errors.Is(err, errInvalidCredentials) {
+				account.Status = "reauth-required"
+				results <- result{index, account}
+				return
+			}
+			if err != nil {
+				results <- result{index, account}
+				return
+			}
+			defer client.Close()
+			mailboxes, err := client.listMailboxes()
+			if err == nil {
+				account.Mailboxes = client.withUnreadCounts(mailboxes)
+				account.Unread = totalUnread(account.Mailboxes)
+				account.Status = "available"
+			}
+			results <- result{index, account}
+		}(index, credential)
+	}
+	accounts := make([]Account, len(auth.credentials.Accounts))
+	for range accounts {
+		result := <-results
+		accounts[result.index] = result.account
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"accounts": accounts})
+}
+
+func (s *Server) handleAddAccount(w http.ResponseWriter, r *http.Request) {
+	auth, ok := s.requireCredential(w, r)
+	if !ok {
 		return
 	}
-	defer client.Close()
-	mailboxes, err := client.listMailboxes()
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "failed to load accounts")
+	var request loginRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid account request")
 		return
 	}
-	mailboxes = client.withUnreadCounts(mailboxes)
-	writeJSON(w, http.StatusOK, map[string]any{"accounts": []Account{s.accountForSession(auth.credential.Email, mailboxes)}})
+	email := strings.TrimSpace(request.Email)
+	localPart, domain, valid := splitLoginEmail(email)
+	if !valid || request.Password == "" {
+		writeError(w, http.StatusBadRequest, "email and password are required")
+		return
+	}
+	if !s.loginDomainAllowed(domain) || verifyIMAPCredentials(s.config, localPart, request.Password) != nil {
+		writeError(w, http.StatusUnauthorized, "이메일 또는 비밀번호가 올바르지 않습니다")
+		return
+	}
+	credential := storedCredential{Email: email, IMAPUsername: localPart, Password: request.Password, ExpiresAt: auth.payload.ExpiresAt}
+	bundle := auth.credentials
+	replaced := false
+	for i := range bundle.Accounts {
+		if equalEmail(bundle.Accounts[i].Email, email) {
+			bundle.Accounts[i] = credential
+			replaced = true
+		}
+	}
+	if !replaced {
+		bundle.Accounts = append(bundle.Accounts, credential)
+	}
+	store, err := newCredentialStore(s.config)
+	if err != nil || store.SaveBundle(auth.payload.SessionID, bundle) != nil {
+		writeError(w, http.StatusInternalServerError, "account is unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"account": s.accountForLogin(email, localPart)})
 }
 
 func (s *Server) handleMessageSummaries(w http.ResponseWriter, r *http.Request) {
@@ -79,12 +142,13 @@ func (s *Server) handleMessageSummaries(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "accountId and mailboxId are required")
 		return
 	}
-	if !equalEmail(accountID, auth.credential.Email) {
-		writeError(w, http.StatusUnauthorized, "authentication required")
+	credential, found := auth.credentialForAccount(accountID)
+	if !found {
+		writeError(w, http.StatusNotFound, "account not found")
 		return
 	}
 
-	client, err := openIMAPSession(s.config, auth.credential)
+	client, err := openIMAPSession(s.config, credential)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to load messages")
 		return
@@ -114,7 +178,12 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, err := openIMAPSession(s.config, auth.credential)
+	credential, found := auth.credentialForMessage(messageID)
+	if !found {
+		writeError(w, http.StatusNotFound, "message not found")
+		return
+	}
+	client, err := openIMAPSession(s.config, credential)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to load message")
 		return
@@ -145,7 +214,12 @@ func (s *Server) handleMessageAttachment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	client, err := openIMAPSession(s.config, auth.credential)
+	credential, found := auth.credentialForMessage(messageID)
+	if !found {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	client, err := openIMAPSession(s.config, credential)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to load attachment")
 		return
@@ -184,7 +258,12 @@ func (s *Server) handleMessageFlagged(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid flagged request")
 		return
 	}
-	client, err := openIMAPSession(s.config, auth.credential)
+	credential, found := auth.credentialForMessage(messageID)
+	if !found {
+		writeError(w, http.StatusNotFound, "message not found")
+		return
+	}
+	client, err := openIMAPSession(s.config, credential)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to update message")
 		return
@@ -217,7 +296,12 @@ func (s *Server) handleMessageSeen(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid seen request")
 		return
 	}
-	client, err := openIMAPSession(s.config, auth.credential)
+	credential, found := auth.credentialForMessage(messageID)
+	if !found {
+		writeError(w, http.StatusNotFound, "message not found")
+		return
+	}
+	client, err := openIMAPSession(s.config, credential)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to update message")
 		return
@@ -250,7 +334,12 @@ func (s *Server) handleMessageMove(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid move request")
 		return
 	}
-	client, err := openIMAPSession(s.config, auth.credential)
+	credential, found := auth.credentialForMessage(messageID)
+	if !found {
+		writeError(w, http.StatusNotFound, "message not found")
+		return
+	}
+	client, err := openIMAPSession(s.config, credential)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to move message")
 		return

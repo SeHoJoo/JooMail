@@ -13,10 +13,12 @@ type SidebarProps = {
   onSelectMailbox: (id: string) => void;
   onCompose: () => void;
   onAddAccount?: () => void;
+  onReauthenticate?: (email: string) => void;
+  onRetryAccount?: () => void;
   onLogout?: () => void;
 };
 
-export function Sidebar({ accounts, selectedAccount, selectedMailboxId, onSelectAccount, onSelectMailbox, onCompose, onAddAccount, onLogout }: SidebarProps) {
+export function Sidebar({ accounts, selectedAccount, selectedMailboxId, onSelectAccount, onSelectMailbox, onCompose, onAddAccount, onReauthenticate, onRetryAccount, onLogout }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const system = selectedAccount.mailboxes.filter((mailbox) => mailbox.kind !== "folder");
   const folders = selectedAccount.mailboxes.filter((mailbox) => mailbox.kind === "folder");
@@ -30,7 +32,7 @@ export function Sidebar({ accounts, selectedAccount, selectedMailboxId, onSelect
     <>
       <SidebarRail mailboxes={collapsedMailboxes} selectedAccount={selectedAccount} selectedMailboxId={selectedMailboxId} onCompose={onCompose} onSelectMailbox={onSelectMailbox} className="md:flex xl:hidden" />
       <aside className="hidden w-[248px] shrink-0 flex-col border-r border-line bg-panel xl:flex">
-        <AccountSwitcher accounts={accounts} selectedAccount={selectedAccount} onSelectAccount={onSelectAccount} onAddAccount={onAddAccount} onLogout={onLogout} />
+        <AccountSwitcher accounts={accounts} selectedAccount={selectedAccount} onSelectAccount={onSelectAccount} onAddAccount={onAddAccount} onReauthenticate={onReauthenticate} onRetryAccount={onRetryAccount} onLogout={onLogout} />
         <div className="flex items-center gap-2 px-[11px] pb-2 pt-[13px]">
           <button className="flex h-[38px] w-full items-center justify-center gap-2 rounded-lg bg-accent px-3 text-[13.5px] font-medium text-white" onClick={onCompose}>
             <Icon name="compose" className="h-4 w-4" />

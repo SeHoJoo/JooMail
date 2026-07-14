@@ -7,10 +7,12 @@ type AccountSwitcherProps = {
   selectedAccount: Account;
   onSelectAccount: (id: string) => void;
   onAddAccount?: () => void;
+  onReauthenticate?: (email: string) => void;
+  onRetryAccount?: () => void;
   onLogout?: () => void;
 };
 
-export function AccountSwitcher({ accounts, selectedAccount, onSelectAccount, onAddAccount, onLogout }: AccountSwitcherProps) {
+export function AccountSwitcher({ accounts, selectedAccount, onSelectAccount, onAddAccount, onReauthenticate, onRetryAccount, onLogout }: AccountSwitcherProps) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(() => Math.max(0, accounts.findIndex((account) => account.id === selectedAccount.id)));
   const rootRef = useRef<HTMLDivElement>(null);
@@ -139,8 +141,10 @@ export function AccountSwitcher({ accounts, selectedAccount, onSelectAccount, on
               <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent text-[10px] font-bold text-white">{account.initials}</span>
               <span className="min-w-0 flex-1">
                 <span className="block break-all leading-4">{account.email}</span>
-                <span className="block truncate text-[11px] text-muted">{account.label}</span>
+                <span className="block truncate text-[11px] text-muted">{account.status === "reauth-required" ? "재인증 필요" : account.status === "unavailable" ? "연결할 수 없음" : account.label}</span>
               </span>
+              {account.status === "reauth-required" && onReauthenticate ? <span className="text-[11px] text-[#b23a30]" onClick={(event) => { event.stopPropagation(); onReauthenticate(account.email); }}>재인증</span> : null}
+              {account.status === "unavailable" && onRetryAccount ? <span className="text-[11px] text-accent" onClick={(event) => { event.stopPropagation(); onRetryAccount(); }}>재시도</span> : null}
             </button>
           ))}
           {onAddAccount || onLogout ? (

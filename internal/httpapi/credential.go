@@ -24,6 +24,13 @@ type storedCredential struct {
 	ExpiresAt    time.Time `json:"expiresAt"`
 }
 
+// credentialBundle is the on-disk v2 format.  Keeping the account list in the
+// session credential file deliberately avoids adding a second account store.
+type credentialBundle struct {
+	Version  int                `json:"version"`
+	Accounts []storedCredential `json:"accounts"`
+}
+
 type credentialStore struct {
 	dir string
 	key []byte
@@ -57,7 +64,19 @@ func parseCredentialKey(value string) ([]byte, error) {
 }
 
 func (s *credentialStore) Save(sessionID string, credential storedCredential) error {
-	if sessionID == "" || credential.Email == "" || credential.Password == "" {
+	return s.SaveBundle(sessionID, credentialBundle{Version: 2, Accounts: []storedCredential{credential}})
+}
+
+func (s *credentialStore) SaveBundle(sessionID string, bundle credentialBundle) error {
+	if bundle.Version != 2 || len(bundle.Accounts) == 0 {
+		return errCredentialUnavailable
+	}
+	for _, credential := range bundle.Accounts {
+		if credential.Email == "" || credential.Password == "" {
+			return errCredentialUnavailable
+		}
+	}
+	if sessionID == "" {
 		return errCredentialUnavailable
 	}
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
@@ -67,7 +86,7 @@ func (s *credentialStore) Save(sessionID string, credential storedCredential) er
 		return err
 	}
 
-	plaintext, err := json.Marshal(credential)
+	plaintext, err := json.Marshal(bundle)
 	if err != nil {
 		return err
 	}
@@ -113,35 +132,49 @@ func (s *credentialStore) Save(sessionID string, credential storedCredential) er
 }
 
 func (s *credentialStore) Load(sessionID string, email string) (storedCredential, error) {
-	var credential storedCredential
+	bundle, err := s.LoadBundle(sessionID)
+	if err != nil {
+		return storedCredential{}, err
+	}
+	for _, credential := range bundle.Accounts {
+		if equalEmail(credential.Email, email) && !time.Now().After(credential.ExpiresAt) {
+			return credential, nil
+		}
+	}
+	return storedCredential{}, errCredentialUnavailable
+}
+
+func (s *credentialStore) LoadBundle(sessionID string) (credentialBundle, error) {
+	var bundle credentialBundle
 	ciphertext, err := os.ReadFile(s.path(sessionID))
 	if err != nil {
-		return credential, errCredentialUnavailable
+		return bundle, errCredentialUnavailable
 	}
 	block, err := aes.NewCipher(s.key)
 	if err != nil {
-		return credential, errCredentialUnavailable
+		return bundle, errCredentialUnavailable
 	}
 	aead, err := cipher.NewGCM(block)
 	if err != nil {
-		return credential, errCredentialUnavailable
+		return bundle, errCredentialUnavailable
 	}
 	if len(ciphertext) < aead.NonceSize() {
-		return credential, errCredentialUnavailable
+		return bundle, errCredentialUnavailable
 	}
 	nonce := ciphertext[:aead.NonceSize()]
 	body := ciphertext[aead.NonceSize():]
 	plaintext, err := aead.Open(nil, nonce, body, nil)
 	if err != nil {
-		return credential, errCredentialUnavailable
+		return bundle, errCredentialUnavailable
 	}
-	if err := json.Unmarshal(plaintext, &credential); err != nil {
-		return credential, errCredentialUnavailable
+	if err := json.Unmarshal(plaintext, &bundle); err == nil && bundle.Version == 2 && len(bundle.Accounts) > 0 {
+		return bundle, nil
 	}
-	if !equalEmail(credential.Email, email) || time.Now().After(credential.ExpiresAt) {
-		return credential, errCredentialUnavailable
+	var legacy storedCredential
+	if err := json.Unmarshal(plaintext, &legacy); err != nil || legacy.Email == "" {
+		return bundle, errCredentialUnavailable
 	}
-	return credential, nil
+	return credentialBundle{Version: 2, Accounts: []storedCredential{legacy}}, nil
 }
 
 func (s *credentialStore) Delete(sessionID string) error {

@@ -16,6 +16,7 @@ type Account struct {
 	Initials  string    `json:"initials"`
 	Unread    int       `json:"unread"`
 	Storage   string    `json:"storage"`
+	Status    string    `json:"status"`
 	Mailboxes []Mailbox `json:"mailboxes"`
 }
 

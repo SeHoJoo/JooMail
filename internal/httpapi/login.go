@@ -82,15 +82,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "login is unavailable")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
+	cookie := &http.Cookie{
 		Name:     "joomail_session",
 		Value:    token,
 		Path:     "/",
-		MaxAge:   int(payload.ExpiresAt.Sub(payload.IssuedAt).Seconds()),
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
-	})
+	}
+	if request.Remember {
+		cookie.MaxAge = int(payload.ExpiresAt.Sub(payload.IssuedAt).Seconds())
+	}
+	http.SetCookie(w, cookie)
 
 	writeJSON(w, http.StatusOK, map[string]any{"account": s.accountForLogin(email, localPart)})
 }
@@ -126,6 +129,7 @@ func (s *Server) accountForLogin(email string, localPart string) Account {
 		Initials:  firstInitial(localPart),
 		Unread:    0,
 		Storage:   "",
+		Status:    "available",
 		Mailboxes: []Mailbox{},
 	}
 }

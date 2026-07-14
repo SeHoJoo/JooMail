@@ -5,10 +5,11 @@ import { Icon } from "./Icon";
 type AddAccountModalProps = {
   onClose: () => void;
   onAdded: (account: Account) => void;
+  initialEmail?: string;
 };
 
-export function AddAccountModal({ onClose, onAdded }: AddAccountModalProps) {
-  const [email, setEmail] = useState("");
+export function AddAccountModal({ onClose, onAdded, initialEmail = "" }: AddAccountModalProps) {
+  const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState(false);
@@ -20,11 +21,11 @@ export function AddAccountModal({ onClose, onAdded }: AddAccountModalProps) {
 
     setSubmitting(true);
     try {
-      const response = await fetch("/api/login", {
+      const response = await fetch("/api/accounts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ email, password, remember: true }),
+        body: JSON.stringify({ email, password }),
       });
 
       if (!response.ok) {

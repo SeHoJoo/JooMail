@@ -37,7 +37,8 @@ Initial API endpoints:
 - `GET /api/health` returns `{"status":"ok"}` for smoke checks.
 - `POST /api/login`
 - `POST /api/logout`
-- `GET /api/accounts`
+- `GET /api/accounts` (each account has `available`, `reauth-required`, or `unavailable` status)
+- `POST /api/accounts` adds an account to the current session or replaces credentials for the same email
 - `GET /api/accounts/{accountID}/mailboxes/{mailboxID}/messages` (`q` search, optional `scope=mailbox|account`)
 - `GET /api/messages/{messageID}`
 - `GET /api/messages/{messageID}/attachments/{attachmentID}`
@@ -52,10 +53,10 @@ Initial API endpoints:
 `POST /api/send` trims To/Cc/Bcc recipients and rejects missing or malformed
 addresses with `400` before opening an SMTP connection. Bcc recipients are used
 for SMTP delivery but are not written to outgoing message headers.
-Send requests are capped at 32 MiB. SMTP auth, recipient, DATA, and Sent append
-failures return the generic `502 failed to send message` response. A Sent append
-failure currently fails the API response after SMTP delivery instead of adding a
-new warning field to the response contract.
+Send requests are capped at 32 MiB. SMTP auth, recipient, and DATA failures
+return the generic `502 failed to send message`. If SMTP has accepted delivery
+but storing the Sent copy fails, the API returns `200` with
+`{"status":"sent","sentCopyStored":false}`; clients must not retry delivery.
 
 `POST /api/drafts` accepts the same JSON or multipart shape as `POST /api/send`,
 but permits incomplete recipients or subject. It appends the generated message to
@@ -69,13 +70,22 @@ field stable for current clients. Account-scope search remains limited to the
 current account, searches each selectable mailbox live through IMAP, caps each
 mailbox fetch, and caps the merged result after sorting.
 
+Accounts are stored only in the encrypted credential bundle for the current
+session. The bundle uses a v2 `accounts` array and reads the former single
+credential format for one session before rewriting it on the next account
+change. `fromAccountId` selects the account for send and drafts; it is optional
+only for a one-account session. Message IDs use opaque `msg2_` values containing
+the account, mailbox, UIDVALIDITY, and UID; an older `msg_` ID is accepted only
+in one-account sessions.
+
 Non-ASCII search terms are sent with `CHARSET UTF-8` first. If the IMAP server
 rejects that charset search, JooMail retries the same `TEXT` search without the
 charset prefix before returning a search failure.
 
 Message move uses IMAP `UID MOVE` when the server supports it. If `MOVE` is not
 accepted, JooMail falls back to `UID COPY`, `UID STORE +FLAGS.SILENT
-(\Deleted)`, and `EXPUNGE` on the selected source mailbox.
+(\Deleted)`, then uses `UID EXPUNGE` only when UIDPLUS is available; otherwise
+deletion is deferred and JooMail never runs a mailbox-wide `EXPUNGE`.
 
 Rules are managed through ManageSieve when `JOOMAIL_MANAGESIEVE_HOST` and
 `JOOMAIL_MANAGESIEVE_PORT` are configured. If ManageSieve is not configured, the

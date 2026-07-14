@@ -195,9 +195,17 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Evidence: `AppShell` consumes `sentCopyStored`, closes compose on successful delivery, and shows one dismissible responsive `role="status"` notification when the Sent copy was not stored.
   Verification: `src/App.test.tsx`; `npm test`; `npm run typecheck`.
 
-- [ ] Update selected-message manual QA wording for the mailbox-list entry policy.
-  Evidence: `docs/qa-ui-states.md` still says selected messages restore from `joomail:mail-state`, while live mailbox-list routes now intentionally start unselected and only explicit message routes restore detail.
-  Required: update the manual checklist during the final documentation synchronization task.
+- [x] Update selected-message manual QA wording for the mailbox-list entry policy.
+  Evidence: live mailbox-list routes intentionally start with an empty reading pane; only an explicit `/mail/:accountId/:mailboxId/:messageId` route restores detail.
+  Verification: `docs/qa-ui-states.md` and `src/App.test.tsx`.
+
+- [x] Add session-scoped multi-account credentials and account availability states.
+  Evidence: encrypted credential files use the v2 account bundle while reading legacy single credentials; `POST /api/accounts` adds or reauthenticates without replacing the session, and `GET /api/accounts` keeps registration order while isolating account failures.
+  Verification: `go test ./internal/httpapi`; `npm run typecheck`.
+
+- [x] Add Starred virtual mailbox baseline.
+  Evidence: available live accounts synthesize `starred` after Inbox, aggregate `FLAGGED UNSEEN NOT DELETED`, and query every selectable live mailbox with `FLAGGED NOT DELETED` while preserving source mailbox IDs.
+  Verification: `go test ./internal/httpapi`.
 
 - [x] Complete compose overlay controls from the plan or explicitly defer each missing control.
   Evidence: `ComposePanel` now supports desktop minimize/restore and expand/collapse controls.

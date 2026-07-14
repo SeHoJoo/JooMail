@@ -24,6 +24,7 @@ export type Account = {
   initials: string;
   unread: number;
   storage: string;
+  status?: "available" | "reauth-required" | "unavailable";
   mailboxes: Mailbox[];
 };
 

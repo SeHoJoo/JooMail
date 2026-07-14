@@ -49,6 +49,10 @@ Use this checklist when capturing visual QA screenshots for development-only UI 
 - `/?qa=nested-tree`
 - `/?qa=mobile-reading-attachments`
 - `/?qa=compose-cc-bcc`
+- `/?qa=send-warning`
+- `/?qa=multi-account`
+- `/?qa=account-unavailable`
+- `/?qa=starred`
 
 Use these screenshot names:
 
@@ -71,6 +75,10 @@ Use these screenshot names:
 | `/?qa=nested-tree` | `desktop-nested-tree.png` | `mobile-nested-tree.png` |
 | `/?qa=mobile-reading-attachments` | `desktop-mobile-reading-attachments.png` | `mobile-mobile-reading-attachments.png` |
 | `/?qa=compose-cc-bcc` | `desktop-compose-cc-bcc.png` | `mobile-compose-cc-bcc.png` |
+| `/?qa=send-warning` | `desktop-send-warning.png` | `mobile-send-warning.png` |
+| `/?qa=multi-account` | `desktop-multi-account.png` | `mobile-multi-account.png` |
+| `/?qa=account-unavailable` | `desktop-account-unavailable.png` | `mobile-account-unavailable.png` |
+| `/?qa=starred` | `desktop-starred.png` | `mobile-starred.png` |
 
 ## Manual browser steps
 

@@ -40,6 +40,10 @@ const QA_STATES: QaState[] = [
   "nested-tree",
   "mobile-reading-attachments",
   "compose-cc-bcc",
+  "send-warning",
+  "multi-account",
+  "account-unavailable",
+  "starred",
 ];
 const SEARCH_QA_QUERY = "MIME";
 const SEARCH_EMPTY_QA_QUERY = "qa-no-results-000";
@@ -120,6 +124,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   const [listWidth, setListWidth] = useState(() => Number(localStorage.getItem(LIST_WIDTH_KEY)) || DEFAULT_LIST_WIDTH);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addAccountOpen, setAddAccountOpen] = useState(false);
+  const [reauthEmail, setReauthEmail] = useState("");
   const [accountNames, setAccountNames] = useState<Record<string, string>>(() => loadAccountNames());
   const [showRemoteImagesByDefault, setShowRemoteImagesByDefault] = useState(() => localStorage.getItem(REMOTE_IMAGES_KEY) === "true");
   const [forceEmptyList, setForceEmptyList] = useState(false);
@@ -280,6 +285,12 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
         if (cancelled) return;
         if (isUnauthorized(error)) {
           onSessionExpired?.();
+          return;
+        }
+        if (error instanceof ApiError && error.status === 404) {
+          setSelectedMessageDetail(undefined);
+          setSelectedMessageId("");
+          navigate(`/mail/${encodeURIComponent(accountId)}/${encodeURIComponent(mailboxId)}`, { replace: true });
           return;
         }
         setMode("error");
@@ -452,6 +463,10 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     setComposeOpen(nextState === "compose" || nextState === "compose-cc-bcc");
     setSelectedMessageId(firstInboxId);
     setShowRemoteImagesByDefault(nextState === "remote-images-shown");
+	setSendWarning(nextState === "send-warning" ? SENT_COPY_WARNING : "");
+	if (nextState === "account-unavailable") {
+		setAccounts((current) => current.map((account, index) => index === 0 ? { ...account, status: "unavailable" } : account));
+	}
 
     if (nextState === "empty" || nextState === "empty-reading" || nextState === "search-empty") {
       setSelectedMessageId("");
@@ -496,6 +511,11 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
     if (nextState === "many-attachments") {
       setSelectedMessageId(manyAttachmentsId);
     }
+
+	if (nextState === "starred") {
+		setMailboxId("starred");
+		setSelectedMessageId(accountMessages.find((message) => message.flagged)?.id ?? "");
+	}
 
     if (nextState === "empty-custom-folder") {
       setMailboxId("clients");
@@ -847,7 +867,11 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
   }
 
   function updateMessageFlagged(id: string, flagged: boolean) {
-    setApiMessages((current) => current.map((item) => (item.id === id ? { ...item, flagged } : item)));
+    setApiMessages((current) => current.flatMap((item) => {
+      if (item.id !== id) return [item];
+      if (mailboxId === "starred" && !flagged) return [];
+      return [{ ...item, flagged }];
+    }));
     setSelectedMessageDetail((current) => (current?.id === id ? { ...current, flagged } : current));
   }
 
@@ -1016,7 +1040,9 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
             onSelectAccount={selectAccount}
             onSelectMailbox={selectMailbox}
             onCompose={openCompose}
-            onAddAccount={useApi ? () => setAddAccountOpen(true) : undefined}
+            onAddAccount={useApi ? () => { setReauthEmail(""); setAddAccountOpen(true); } : undefined}
+            onReauthenticate={useApi ? (email) => { setReauthEmail(email); setAddAccountOpen(true); } : undefined}
+            onRetryAccount={useApi ? () => void refreshAccounts() : undefined}
             onLogout={useApi ? logout : undefined}
           />
           <MessageList
@@ -1077,7 +1103,7 @@ export function AppShell({ initialAccounts, onSessionExpired }: AppShellProps) {
           onClose={() => setSettingsOpen(false)}
         />
       ) : null}
-      {addAccountOpen ? <AddAccountModal onClose={() => setAddAccountOpen(false)} onAdded={refreshAccounts} /> : null}
+      {addAccountOpen ? <AddAccountModal initialEmail={reauthEmail} onClose={() => setAddAccountOpen(false)} onAdded={refreshAccounts} /> : null}
       {composeOpen ? <ComposePanel accounts={displayAccounts} account={selectedAccount} mode={composeMode} message={composeMessage} ccBccOpenByDefault={forceComposeCcBcc} onDirtyChange={updateComposeDirty} onClose={closeCompose} onSend={useApi ? sendDraft : undefined} onSaveDraft={useApi ? saveDraft : undefined} /> : null}
       {import.meta.env.DEV && !composeOpen ? <DevStateSwitcher states={QA_STATES} onApply={applyQaState} /> : null}
     </div>

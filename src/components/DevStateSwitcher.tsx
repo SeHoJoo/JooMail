@@ -18,7 +18,11 @@ export type QaState =
   | "empty-custom-folder"
   | "nested-tree"
   | "mobile-reading-attachments"
-  | "compose-cc-bcc";
+  | "compose-cc-bcc"
+  | "send-warning"
+  | "multi-account"
+  | "account-unavailable"
+  | "starred";
 
 type DevStateSwitcherProps = {
   states: QaState[];
@@ -44,6 +48,10 @@ const labels: Record<QaState, string> = {
   "nested-tree": "Nested tree",
   "mobile-reading-attachments": "Mobile reading",
   "compose-cc-bcc": "Compose Cc/Bcc",
+  "send-warning": "Send warning",
+  "multi-account": "Multi-account",
+  "account-unavailable": "Account unavailable",
+  starred: "Starred",
 };
 
 export function DevStateSwitcher({ states, onApply }: DevStateSwitcherProps) {
