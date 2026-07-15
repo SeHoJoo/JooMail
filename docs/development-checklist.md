@@ -27,9 +27,9 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
 - [x] MIME parser edge fixtures cover deeper nesting and attachment filename edge cases.
   Evidence: parser tests cover nested mixed inside alternative, related inside alternative, duplicate and missing CIDs, malformed attachment filename fallback, RFC 2231 filenames, long Unicode snippets, and HTML-only messages.
   Verification: `TestParseRawMessageNestedMixedInsideAlternative`, `TestParseRawMessageRelatedInsideAlternativeMapsCIDImages`, `TestParseRawMessageDuplicateContentIDUsesLastInlineImage`, `TestParseRawMessageMissingRelatedCIDImageIsSanitized`, `TestParseRawMessageMalformedAttachmentFilenameUsesFallback`, `TestParseRawMessageRFC2231EncodedFilename`, `TestParseRawMessageLargeUnicodeSnippetTruncatesByRune`, `TestParseRawMessageHTMLOnlyMessage`; `go test ./internal/httpapi`.
-- [x] HTML sanitizer fixtures cover CSS remote URLs, SVG data images, raster data images, and forms.
-  Evidence: sanitizer tests verify CSS/style remote URLs are stripped, SVG data images are blocked, allowed raster data images remain, and form/input/button elements are removed.
-  Verification: `TestSanitizeMailHTMLRemovesCSSRemoteImageURLs`, `TestSanitizeMailHTMLBlocksSVGDataImages`, `TestSanitizeMailHTMLAllowsRasterDataImages`, `TestSanitizeMailHTMLRemovesForms`; `go test ./internal/httpapi`.
+- [x] HTML sanitizer preserves safe email layout styles while blocking active or remote CSS.
+  Evidence: a property allowlist preserves colors, spacing, borders, typography, alignment, and display for common email HTML; style values containing `url`, `expression`, `@`, or `!` are rejected. SVG data images, forms, inputs, and buttons remain blocked.
+  Verification: `TestSanitizeMailHTMLPreservesCommonEmailLayoutAndSafeInlineStyles`, `TestSanitizeMailHTMLRemovesCSSRemoteImageURLs`, `TestSanitizeMailHTMLBlocksSVGDataImages`, `TestSanitizeMailHTMLAllowsRasterDataImages`, `TestSanitizeMailHTMLRemovesForms`; `go test ./internal/httpapi`.
 - [x] Attachment download policy and header-injection behavior are pinned.
   Evidence: attachment downloads use parsed MIME content type with `application/octet-stream` fallback when absent, and formatted download filenames cannot inject response headers.
   Verification: `TestMessageAttachmentRouteDownloadsDecodedAttachment`, `TestExtractAttachmentPayloadDefaultsMissingContentType`, `TestMessageAttachmentDownloadFilenameCannotInjectHeaders`; `go test ./internal/httpapi`.

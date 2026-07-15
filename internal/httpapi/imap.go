@@ -36,6 +36,7 @@ var remoteImageSrcPattern = regexp.MustCompile(`(?i)(<img\b[^>]*?)\s+src\s*=\s*(
 var cidImageSrcPattern = regexp.MustCompile(`(?i)(<img\b[^>]*?)\s+src\s*=\s*("cid:[^"]+"|'cid:[^']+'|cid:[^\s>]+)`)
 var dataImageSrcPattern = regexp.MustCompile(`(?i)^data:image/(gif|jpeg|png|webp);base64,[a-z0-9+/]+=*$`)
 var messageIDPattern = regexp.MustCompile(`<([^>]+)>`)
+var safeMailCSSValuePattern = regexp.MustCompile(`(?i)^[#(),.%\-\s0-9a-z]+$`)
 
 type inlineImage struct {
 	mediaType string
@@ -1570,8 +1571,15 @@ func sanitizeMailHTML(value string) (string, bool) {
 	policy.AllowAttrs("bgcolor", "border", "cellpadding", "cellspacing", "height", "valign", "width").OnElements("table", "td", "th", "tr")
 	policy.AllowAttrs("colspan", "rowspan").OnElements("td", "th")
 	policy.AllowAttrs("color", "face", "size").OnElements("font")
+	policy.AllowAttrs("style").OnElements("a", "blockquote", "div", "font", "h1", "h2", "h3", "h4", "h5", "h6", "li", "ol", "p", "pre", "span", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul")
+	policy.AllowStyles("background-color", "border", "border-bottom", "border-color", "border-radius", "border-style", "border-width", "color", "display", "font-family", "font-size", "font-style", "font-weight", "letter-spacing", "line-height", "margin", "margin-bottom", "margin-left", "margin-right", "margin-top", "max-width", "min-width", "padding", "padding-bottom", "padding-left", "padding-right", "padding-top", "text-align", "text-decoration", "text-transform", "vertical-align", "white-space", "width").MatchingHandler(safeMailCSSValue).Globally()
 	policy.AllowDataURIImages()
 	return policy.Sanitize(value), remoteImagesBlocked
+}
+
+func safeMailCSSValue(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	return value != "" && safeMailCSSValuePattern.MatchString(value) && !strings.Contains(value, "url") && !strings.Contains(value, "expression") && !strings.Contains(value, "@") && !strings.Contains(value, "!")
 }
 
 func hasRemoteImage(value string) bool {

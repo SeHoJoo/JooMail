@@ -2047,15 +2047,20 @@ func TestSanitizeMailHTMLRemovesForms(t *testing.T) {
 	}
 }
 
-func TestSanitizeMailHTMLPreservesCommonEmailLayoutAttributes(t *testing.T) {
-	htmlBody, _ := sanitizeMailHTML(`<h2 align="center">Title</h2><table width="640" cellpadding="8" cellspacing="0" border="1" bgcolor="#ffffff"><tr><td align="right" valign="top" colspan="2"><font color="#333333" size="3">Cell</font></td></tr></table><script>alert(1)</script><p style="color:red">Safe</p>`)
+func TestSanitizeMailHTMLPreservesCommonEmailLayoutAndSafeInlineStyles(t *testing.T) {
+	htmlBody, _ := sanitizeMailHTML(`<h2 align="center">Title</h2><table width="640" cellpadding="8" cellspacing="0" border="1" bgcolor="#ffffff"><tr><td align="right" valign="top" colspan="2"><font color="#333333" size="3">Cell</font></td></tr></table><a href="https://example.com" style="background-color:#2563eb;color:#ffffff;padding:12px 20px;border-radius:6px;text-decoration:none;display:inline-block">Open</a><script>alert(1)</script><p style="color:red;background-image:url(https://tracker.example/pixel.png)">Safe</p>`)
 
 	for _, want := range []string{`<h2 align="center">Title</h2>`, `width="640"`, `cellpadding="8"`, `cellspacing="0"`, `border="1"`, `bgcolor="#ffffff"`, `align="right"`, `valign="top"`, `colspan="2"`, `<font color="#333333" size="3">Cell</font>`} {
 		if !strings.Contains(htmlBody, want) {
 			t.Fatalf("htmlBody = %q, missing preserved layout %q", htmlBody, want)
 		}
 	}
-	for _, blocked := range []string{"script", "style="} {
+	for _, want := range []string{`background-color: #2563eb`, `color: #ffffff`, `padding: 12px 20px`, `border-radius: 6px`, `text-decoration: none`, `display: inline-block`, `style="color: red"`} {
+		if !strings.Contains(htmlBody, want) {
+			t.Fatalf("htmlBody = %q, missing safe inline style %q", htmlBody, want)
+		}
+	}
+	for _, blocked := range []string{"script", "background-image", "tracker.example"} {
 		if strings.Contains(strings.ToLower(htmlBody), blocked) {
 			t.Fatalf("htmlBody = %q, contains blocked content %q", htmlBody, blocked)
 		}
