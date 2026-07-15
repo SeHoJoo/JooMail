@@ -1571,8 +1571,8 @@ func sanitizeMailHTML(value string) (string, bool) {
 	policy.AllowAttrs("bgcolor", "border", "cellpadding", "cellspacing", "height", "valign", "width").OnElements("table", "td", "th", "tr")
 	policy.AllowAttrs("colspan", "rowspan").OnElements("td", "th")
 	policy.AllowAttrs("color", "face", "size").OnElements("font")
-	policy.AllowAttrs("style").OnElements("a", "blockquote", "div", "font", "h1", "h2", "h3", "h4", "h5", "h6", "li", "ol", "p", "pre", "span", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul")
-	policy.AllowStyles("background-color", "border", "border-bottom", "border-color", "border-radius", "border-style", "border-width", "color", "display", "font-family", "font-size", "font-style", "font-weight", "letter-spacing", "line-height", "margin", "margin-bottom", "margin-left", "margin-right", "margin-top", "max-width", "min-width", "padding", "padding-bottom", "padding-left", "padding-right", "padding-top", "text-align", "text-decoration", "text-transform", "vertical-align", "white-space", "width").MatchingHandler(safeMailCSSValue).Globally()
+	policy.AllowAttrs("style").OnElements("a", "blockquote", "div", "font", "h1", "h2", "h3", "h4", "h5", "h6", "img", "li", "ol", "p", "pre", "span", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul")
+	policy.AllowStyles("background", "background-color", "border", "border-bottom", "border-collapse", "border-color", "border-radius", "border-spacing", "border-style", "border-width", "color", "display", "float", "font-family", "font-size", "font-style", "font-weight", "height", "letter-spacing", "line-height", "margin", "margin-bottom", "margin-left", "margin-right", "margin-top", "max-width", "min-width", "padding", "padding-bottom", "padding-left", "padding-right", "padding-top", "table-layout", "text-align", "text-decoration", "text-transform", "vertical-align", "white-space", "width").MatchingHandler(safeMailCSSValue).Globally()
 	policy.AllowDataURIImages()
 	return policy.Sanitize(value), remoteImagesBlocked
 }
