@@ -21,7 +21,8 @@ describe("mailRendering", () => {
     const { container } = render(<MailHTMLBody html={html} />);
 
     const frame = screen.getByTitle("메일 HTML 본문");
-    expect(frame).toHaveAttribute("srcdoc", expect.stringContaining(html));
+    expect(frame).toHaveAttribute("srcdoc", expect.stringContaining('<table width="640">'));
+    expect(frame).toHaveAttribute("srcdoc", expect.stringContaining('<font color="#333333">Cell</font>'));
     expect(container.querySelector("table")).toBeNull();
   });
 

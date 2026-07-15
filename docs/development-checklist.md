@@ -52,7 +52,7 @@ Audit basis: `AGENTS.md`, `README.md`, `docs/webmail-ui-plan.md`, `docs/qa-ui-st
   Evidence: `src/App.tsx` loads `/api/accounts`, message summaries, details, send, move, seen, flagged.
   Verification: `npm run typecheck`.
 - [x] Sanitized HTML mail bodies render without app CSS interference.
-  Evidence: desktop `ReadingPane` and mobile reading view render backend-provided `htmlBody` through a sandboxed iframe `srcDoc` instead of injecting mail HTML directly into the app DOM. The iframe boundary also removes script tags and inline event attributes before assigning `srcDoc`, avoiding attempted script execution even if malformed HTML reaches the client.
+  Evidence: desktop `ReadingPane` and mobile reading view render backend-provided `htmlBody` through a sandboxed iframe `srcDoc` instead of injecting mail HTML directly into the app DOM. The iframe boundary parses the final HTML with `DOMParser` and removes script, nested-frame, plugin, base, and inline event markup before assigning `srcDoc`, avoiding attempted script execution even if malformed HTML reaches the client.
   Verification: `src/components/mailRendering.test.tsx`; `npm test`; `npm run typecheck`.
 - [x] Dev-only QA routes exist for visual states.
   Evidence: `/?qa=loading`, `/?qa=error`, `/?qa=empty`, `/?qa=search`, `/?qa=search-account`, `/?qa=search-empty`, `/?qa=multiselect`, `/?qa=compose`, `/?qa=remote-images-shown`, `/?qa=quoted-expanded`, `/?qa=long-overflow`, `/?qa=many-attachments`, `/?qa=empty-custom-folder`, `/?qa=nested-tree`, `/?qa=mobile-reading-attachments`, `/?qa=compose-cc-bcc`.

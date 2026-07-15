@@ -44,10 +44,20 @@ export function mailHTMLSrcDoc(html: string) {
 }
 
 function stripExecutableEmailMarkup(html: string) {
-  return html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
-    .replace(/<script\b[^>]*\/?\s*>/gi, "")
-    .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  if (typeof DOMParser === "undefined") {
+    return html
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
+      .replace(/<script\b[^>]*\/?\s*>/gi, "")
+      .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  }
+  const document = new DOMParser().parseFromString(html, "text/html");
+  document.querySelectorAll("script, iframe, object, embed, base").forEach((element) => element.remove());
+  document.querySelectorAll("*").forEach((element) => {
+    for (const attribute of Array.from(element.attributes)) {
+      if (attribute.name.startsWith("on")) element.removeAttribute(attribute.name);
+    }
+  });
+  return document.body.innerHTML;
 }
 
 const mailHTMLFrameCSS = `
