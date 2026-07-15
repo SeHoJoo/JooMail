@@ -40,7 +40,14 @@ export function MailHTMLBody({ html, className = "" }: { html: string; className
 }
 
 export function mailHTMLSrcDoc(html: string) {
-  return `<!doctype html><html><head><base target="_blank"><style>${mailHTMLFrameCSS}</style></head><body>${html}</body></html>`;
+  return `<!doctype html><html><head><base target="_blank"><style>${mailHTMLFrameCSS}</style></head><body>${stripExecutableEmailMarkup(html)}</body></html>`;
+}
+
+function stripExecutableEmailMarkup(html: string) {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
+    .replace(/<script\b[^>]*\/?\s*>/gi, "")
+    .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "");
 }
 
 const mailHTMLFrameCSS = `

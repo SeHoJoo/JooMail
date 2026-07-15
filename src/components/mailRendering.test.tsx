@@ -32,4 +32,12 @@ describe("mailRendering", () => {
     expect(srcDoc).not.toContain("[&_p]");
     expect(srcDoc).not.toContain("text-sm");
   });
+
+  it("removes executable email markup before creating the sandboxed document", () => {
+    const srcDoc = mailHTMLSrcDoc('<p onclick="alert(1)">Hello</p><script>alert(1)</script>');
+
+    expect(srcDoc).toContain("<p>Hello</p>");
+    expect(srcDoc).not.toContain("onclick");
+    expect(srcDoc).not.toContain("<script");
+  });
 });
